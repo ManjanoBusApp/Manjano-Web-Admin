@@ -1,61 +1,69 @@
+﻿import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import Login from "./pages/Login";
+import Dashboard from "./pages/Dashboard";
+import Schools from "./pages/schools/Schools";
+import Students from "./pages/students/Students";
+import { useAuth } from "./hooks/useAuth";
+import DashboardLayout from "./components/layout/DashboardLayout";
+
 export default function App() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return <div className="p-6">Loading...</div>;
+  }
+
   return (
-    <div className="h-screen flex">
-      {/* Sidebar */}
-      <div className="w-64 bg-gray-900 text-white p-4">
-        <h1 className="text-xl font-bold mb-6">Manjano Admin</h1>
+    <BrowserRouter>
+      <Routes>
 
-        <nav className="space-y-3">
-          <div className="hover:bg-gray-700 p-2 rounded cursor-pointer">
-            Dashboard
-          </div>
+        {/* LOGIN */}
+        <Route
+          path="/"
+          element={!user ? <Login /> : <Navigate to="/dashboard" />}
+        />
 
-          <div className="hover:bg-gray-700 p-2 rounded cursor-pointer">
-            Schools
-          </div>
+        {/* DASHBOARD */}
+        <Route
+          path="/dashboard"
+          element={
+            user ? (
+              <DashboardLayout>
+                <Dashboard />
+              </DashboardLayout>
+            ) : (
+              <Navigate to="/" />
+            )
+          }
+        />
 
-          <div className="hover:bg-gray-700 p-2 rounded cursor-pointer">
-            Students
-          </div>
+<Route
+  path="/students"
+  element={
+    user ? (
+      <DashboardLayout>
+        <Students />
+      </DashboardLayout>
+    ) : (
+      <Navigate to="/" />
+    )
+  }
+/>
+        {/* SCHOOLS */}
+        <Route
+          path="/schools"
+          element={
+            user ? (
+              <DashboardLayout>
+                <Schools />
+              </DashboardLayout>
+            ) : (
+              <Navigate to="/" />
+            )
+          }
+        />
 
-          <div className="hover:bg-gray-700 p-2 rounded cursor-pointer">
-            Drivers
-          </div>
-
-          <div className="hover:bg-gray-700 p-2 rounded cursor-pointer">
-            Parents
-          </div>
-        </nav>
-      </div>
-
-      {/* Main content */}
-      <div className="flex-1 bg-gray-100 p-6">
-        <h2 className="text-2xl font-semibold mb-4">
-          Dashboard Overview
-        </h2>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-white p-4 rounded shadow">
-            <p className="text-gray-500">Schools</p>
-            <p className="text-2xl font-bold">0</p>
-          </div>
-
-          <div className="bg-white p-4 rounded shadow">
-            <p className="text-gray-500">Students</p>
-            <p className="text-2xl font-bold">0</p>
-          </div>
-
-          <div className="bg-white p-4 rounded shadow">
-            <p className="text-gray-500">Drivers</p>
-            <p className="text-2xl font-bold">0</p>
-          </div>
-
-          <div className="bg-white p-4 rounded shadow">
-            <p className="text-gray-500">Parents</p>
-            <p className="text-2xl font-bold">0</p>
-          </div>
-        </div>
-      </div>
-    </div>
+      </Routes>
+    </BrowserRouter>
   );
 }
