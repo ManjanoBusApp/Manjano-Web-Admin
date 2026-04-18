@@ -1,6 +1,6 @@
 ﻿import { signOut } from "firebase/auth";
-import { auth } from "../firebase/firebase";
-import { useDashboardStats } from "../hooks/useDashboardStats";
+import { auth } from "../../firebase/firebase";
+import { useDashboardStats } from "../../hooks/useDashboardStats";
 
 export default function Dashboard() {
   const handleLogout = async () => {

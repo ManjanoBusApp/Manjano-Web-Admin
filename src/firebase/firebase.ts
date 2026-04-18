@@ -2,6 +2,7 @@
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage"; // Added this for the logo
+import { getDatabase } from "firebase/database";
 
 // ==================== STRONG ENV DEBUG ====================
 console.log("=== VITE ENV DEBUG START ===");
@@ -28,6 +29,8 @@ if (!firebaseConfig.apiKey) {
 
 const app = initializeApp(firebaseConfig);
 
+
+export const realtimeDb = getDatabase(app);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app); // Added this export for the logo

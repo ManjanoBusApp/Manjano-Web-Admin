@@ -8,10 +8,17 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase/firebase";
 
+const toTitleCase = (value: string) => {
+  return value
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
 export default function Schools() {
   const [schools, setSchools] = useState<any[]>([]);
   const [schoolId, setSchoolId] = useState("");
   const [schoolName, setSchoolName] = useState("");
+  const [schoolSearchQuery, setSchoolSearchQuery] = useState("");
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "schools"), (snap) => {
@@ -68,7 +75,54 @@ export default function Schools() {
   return (
     <div style={{ width: "100%" }}>
       {/* TITLE */}
-      <h2 style={{ fontSize: 24, marginBottom: 20 }}>Schools</h2>
+      <h2 style={{ fontSize: 24, marginBottom: 10 }}>Schools</h2>
+
+{/* SEARCH BAR */}
+<div
+  style={{
+    background: "#f2f2f2",
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 20,
+    border: "1px solid #e0e0e0",
+  }}
+>
+  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+    Search School or ID
+  </div>
+
+  <div style={{ display: "flex", gap: 8 }}>
+    <input
+      value={schoolSearchQuery}
+      onChange={(e) =>
+        setSchoolSearchQuery(toTitleCase(e.target.value))
+      }
+      placeholder="Type school name or ID"
+      style={{
+        padding: 10,
+        border: "1px solid #ccc",
+        width: "100%",
+        borderRadius: 6,
+        background: "#f5f5f5",
+      }}
+    />
+
+    {schoolSearchQuery && (
+      <button
+        onClick={() => setSchoolSearchQuery("")}
+        style={{
+          padding: "6px 10px",
+          border: "1px solid #ccc",
+          background: "white",
+          borderRadius: 6,
+          cursor: "pointer",
+        }}
+      >
+        Clear
+      </button>
+    )}
+  </div>
+</div>
 
       {/* ADD SCHOOL */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
@@ -76,7 +130,7 @@ export default function Schools() {
         <input
           value={schoolId}
           onChange={(e) => setSchoolId(e.target.value.toUpperCase())}
-          placeholder="School ID (e.g KSIC)"
+          placeholder="School ID (e.g ABC)"
           style={{
             padding: 12,
             border: "1px solid #ddd",
@@ -98,7 +152,7 @@ export default function Schools() {
 
             setSchoolName(formatted);
           }}
-          placeholder="School Name (e.g Kitengela International School)"
+          placeholder="School Name (e.g ABC High School)"
           style={{
             padding: 12,
             border: "1px solid #ddd",
@@ -142,7 +196,17 @@ export default function Schools() {
 
       {/* LIST */}
       <div style={{ display: "grid", gap: 10 }}>
-        {schools.map((s) => (
+      {schools
+  .filter((s) => {
+    const q = schoolSearchQuery.toLowerCase().trim();
+    if (!q) return true;
+
+    return (
+      s.schoolId?.toLowerCase().includes(q) ||
+      s.schoolName?.toLowerCase().includes(q)
+    );
+  })
+  .map((s) => (
           <div
             key={s.id}
             style={{

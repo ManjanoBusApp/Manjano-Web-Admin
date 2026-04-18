@@ -3,11 +3,26 @@ import { Link, useLocation } from "react-router-dom";
 export default function Sidebar() {
   const location = useLocation();
 
+  const items = [
+    { path: "/dashboard", label: "Dashboard" },
+    { path: "/drivers", label: "Drivers" },
+    { path: "/parents", label: "Parents" },
+    { path: "/routes", label: "Routes" },
+    { path: "/schools", label: "Schools" },
+    { path: "/students", label: "Students" },
+  ];
+
+  // Alphabetical sort by label
+  const sortedItems = [...items].sort((a, b) =>
+    a.label.localeCompare(b.label)
+  );
+
   const item = (path: string, label: string) => {
     const active = location.pathname === path;
 
     return (
       <Link
+        key={path}
         to={path}
         style={{
           display: "block",
@@ -35,28 +50,12 @@ export default function Sidebar() {
         padding: 12,
       }}
     >
-      {/* LOGO (FIXED) */}
-      <div
-        style={{
-          marginBottom: 16,
-          marginTop: 4,
-          textAlign: "center",
-        }}
-      >
-        <img
-          src="/logo.jpg"
-          style={{
-            width: 90,
-            height: "auto",
-          }}
-        />
+      {/* LOGO */}
+      <div style={{ marginBottom: 16, textAlign: "center" }}>
+        <img src="/logo.jpg" style={{ width: 90 }} />
       </div>
 
-      {item("/dashboard", "Dashboard")}
-      {item("/schools", "Schools")}
-      {item("/students", "Students")}
-      {item("/drivers", "Drivers")}
-      {item("/parents", "Parents")}
+      {sortedItems.map((i) => item(i.path, i.label))}
     </div>
   );
 }

@@ -1,9 +1,13 @@
 ﻿import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
+import { useAuth } from "./hooks/useAuth";
+
+import Login from "./pages/auth/Login";
+import Dashboard from "./pages/dashboard/Dashboard";
 import Schools from "./pages/schools/Schools";
 import Students from "./pages/students/Students";
-import { useAuth } from "./hooks/useAuth";
+import Parents from "./pages/parents/Parents";
+import RoutesPage from "./modules/routes/pages/RoutesPage";
+import "react-phone-number-input/style.css";
 import DashboardLayout from "./components/layout/DashboardLayout";
 
 export default function App() {
@@ -37,18 +41,6 @@ export default function App() {
           }
         />
 
-<Route
-  path="/students"
-  element={
-    user ? (
-      <DashboardLayout>
-        <Students />
-      </DashboardLayout>
-    ) : (
-      <Navigate to="/" />
-    )
-  }
-/>
         {/* SCHOOLS */}
         <Route
           path="/schools"
@@ -56,6 +48,48 @@ export default function App() {
             user ? (
               <DashboardLayout>
                 <Schools />
+              </DashboardLayout>
+            ) : (
+              <Navigate to="/" />
+            )
+          }
+        />
+
+        {/* STUDENTS */}
+        <Route
+          path="/students"
+          element={
+            user ? (
+              <DashboardLayout>
+                <Students />
+              </DashboardLayout>
+            ) : (
+              <Navigate to="/" />
+            )
+          }
+        />
+
+        {/* ROUTES */}
+        <Route
+          path="/routes"
+          element={
+            user ? (
+              <DashboardLayout>
+                <RoutesPage />
+              </DashboardLayout>
+            ) : (
+              <Navigate to="/" />
+            )
+          }
+        />
+
+        {/* PARENTS */}
+        <Route
+          path="/parents"
+          element={
+            user ? (
+              <DashboardLayout>
+                <Parents />
               </DashboardLayout>
             ) : (
               <Navigate to="/" />
