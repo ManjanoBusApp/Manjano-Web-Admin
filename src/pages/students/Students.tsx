@@ -7,8 +7,35 @@ import {
   doc,
 } from "firebase/firestore";
 
-import { db } from "../../firebase/firebase";
+import { db, realtimeDb } from "../../firebase/firebase";
+import { ref, set, remove } from "firebase/database";
 
+const formatDateTime = (value) => {
+  if (!value) return "-";
+
+  const date = new Date(value);
+
+  const day = date.getDate();
+  const month = date.toLocaleString("en-GB", { month: "short" });
+  const year = date.getFullYear();
+
+  let hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+
+  const ampm = hours >= 12 ? "pm" : "am";
+  hours = hours % 12 || 12;
+
+  const suffix =
+    day % 10 === 1 && day !== 11
+      ? "st"
+      : day % 10 === 2 && day !== 12
+      ? "nd"
+      : day % 10 === 3 && day !== 13
+      ? "rd"
+      : "th";
+
+  return `${day}${suffix} ${month} ${year} at ${hours}:${minutes}${ampm}`;
+};
 
 
 // ✅ Title case (safe while typing, does NOT break spacebar)
@@ -42,22 +69,64 @@ const [schoolSearchQuery, setSchoolSearchQuery] = useState("");
 const [routeSearchQuery, setRouteSearchQuery] = useState("");
 
 const [routes, setRoutes] = useState<any[]>([]);
+const [parents, setParents] = useState<any[]>([]);
+
+const [pickupLocation, setPickupLocation] = useState("");
+const [dropoffLocation, setDropoffLocation] = useState("");
 
 const [selectedStudent, setSelectedStudent] = useState<any>(null);
+const [dropdownValue, setDropdownValue] = useState("");
+const [linkedParentId, setLinkedParentId] = useState("");
+const [currentPage, setCurrentPage] = useState(1);
+const [pageSize, setPageSize] = useState(10);
+
+const normalize = (v: string) =>
+  (v || "")
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+const getChildFromParent = (parentPhone: string, childName: string) => {
+  const parent = parents.find((p) => p.phone === parentPhone);
+  if (!parent || !Array.isArray(parent.children)) return null;
+
+  const target = normalize(childName);
+
+  // 1. strict match (correct path)
+  let match = parent.children.find((c: any) =>
+    normalize(c?.name) === target
+  );
+
+  // 2. fallback match (safer for formatting inconsistencies)
+  if (!match) {
+    match = parent.children.find((c: any) =>
+      normalize(c?.name).includes(target) ||
+      target.includes(normalize(c?.name))
+    );
+  }
+
+  return match || null;
+};
 
 const handleStudentSelect = (studentId: string) => {
   const student = students.find((s) => s.studentId === studentId);
-
   if (!student) return;
 
-  setSelectedStudent(student);
+  const parentRecord = parents.find((p) => p.phone === student.parentPhone);
+  const childRecord = (parentRecord?.children || []).find(
+    (c: any) => (c.name || "").trim().toLowerCase() === student.studentName.trim().toLowerCase()
+  );
 
+  setSelectedStudent(student);
   setStudentId(student.studentId);
   setStudentName(student.studentName || "");
   setParentPhone(student.parentPhone || "");
   setSchoolId(student.schoolId || "");
   setRouteId(student.routeId || "");
   setBusId(student.busId || "");
+  setPickupLocation(childRecord?.pickupLocation || student.pickupLocation || "");
+  setDropoffLocation(childRecord?.dropoffLocation || student.dropoffLocation || "");
 };
 
 const handleRouteChange = (selectedRouteId: string) => {
@@ -95,33 +164,38 @@ const handleRouteChange = (selectedRouteId: string) => {
     return () => unsub();
   }, []);
 
-  // LOAD STUDENTS //
+ // LOAD STUDENTS //
 
 useEffect(() => {
-  const unsub = onSnapshot(collection(db, "students"), (snap) => {
+  const unsub = onSnapshot(collection(db, "students"), async (snap) => {
     const data = snap.docs.map((d) => {
       const s = d.data() as any;
       
       let rawName = s.studentName || s.name || s.childName || "";
 
-      // 🔥 Much stronger cleaning - removes IDs at the end
       let studentName = rawName
         .trim()
-        .replace(/^\s*-\s*/, "")                    // remove leading "- "
-        .replace(/\s+[A-Za-z0-9&]{6,}$/, "")       // removes IDs like Se4GhyJKI98BV, OK8hyt&ki98d
-        .replace(/\s+\w{6,}\d{2,}$/, "")           // another common pattern
-        .replace(/\s+[A-Za-z0-9]{10,}$/, "")       // longer IDs
-        .trim();
+        .replace(/^\s*-\s*/, ""); // remove leading "- " only
 
-      return {
-        docId: d.id,
-        studentId: s.studentId || d.id,
-        studentName: studentName,
-        schoolId: s.schoolId || "",
-        parentPhone: s.parentPhone || "",
-        routeId: s.routeId || "",
-        busId: s.busId || "",
-      };
+        return {
+          docId: d.id,
+          studentId: s.studentId || d.id,
+          studentName: studentName,
+          schoolId: s.schoolId || "",
+          parentPhone: s.parentPhone || "",
+          parentId: s.parentId || "",
+          routeId: s.routeId || "",
+          busId: s.busId || "",
+        
+          // ✅ NEW FIELDS
+          createdAt: s.createdAt || null,
+          updatedAt: s.updatedAt || null,
+        
+          pickupLocation: s.pickupLocation || "",
+          dropoffLocation: s.dropoffLocation || "",
+        
+          _raw: s,
+        };
     });
 
     const cleanStudents = data.filter((s) => 
@@ -131,7 +205,76 @@ useEffect(() => {
 
     cleanStudents.sort((a, b) => a.studentName.localeCompare(b.studentName));
 
-    setStudents(cleanStudents);
+    setStudents(
+      cleanStudents.map((s) => ({
+        docId: s.docId,
+        studentId: s.studentId,
+        studentName: s.studentName,
+        schoolId: s.schoolId,
+        parentPhone: s.parentPhone,
+        parentId: s.parentId,
+        routeId: s.routeId,
+        busId: s.busId,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        createdAtReadable: s._raw?.createdAtReadable,
+        updatedAtReadable: s._raw?.updatedAtReadable,
+    
+        // ✅ KEEP THESE ALWAYS SAFE
+        pickupLocation: s.pickupLocation || "",
+        dropoffLocation: s.dropoffLocation || "",
+      }))
+    );
+
+    // ONE-TIME BACKFILL: write any student missing from RTDB
+    const { get } = await import("firebase/database");
+    const rtdbSnap = await get(ref(realtimeDb, "students"));
+    const existingRtdbKeys = new Set(
+      rtdbSnap.exists() ? Object.keys(rtdbSnap.val()) : []
+    );
+
+    const backfillPromises: Promise<any>[] = [];
+
+    data.forEach((s) => {
+      if (!existingRtdbKeys.has(s.docId)) {
+        const payload = {
+          studentId: s.studentId,
+          studentName: s.studentName,
+        
+          schoolId: s.schoolId,
+          schoolRef: s.schoolId ? `schools/${s.schoolId}` : "",
+        
+          parentPhone: s.parentPhone,
+          parentId: s.parentId,
+        
+          routeId: s.routeId,
+          routeRef: s.routeId ? `routes/${s.routeId}` : "",
+        
+          busId: s.busId,
+          busRef: s.busId ? `buses/${s.busId}` : "",
+        
+          pickupLocation: s._raw.pickupLocation || "",
+          dropoffLocation: s._raw.dropoffLocation || "",
+        
+          pickupLat: s._raw.pickupLat ?? null,
+          pickupLng: s._raw.pickupLng ?? null,
+          dropoffLat: s._raw.dropoffLat ?? null,
+          dropoffLng: s._raw.dropoffLng ?? null,
+        
+          status: s._raw.status || "active",
+          createdAt: s._raw.createdAt?.toMillis?.() || s._raw.createdAt || Date.now(),
+        };
+
+        backfillPromises.push(
+          set(ref(realtimeDb, `students/${s.docId}`), payload)
+        );
+      }
+    });
+
+    if (backfillPromises.length > 0) {
+      await Promise.all(backfillPromises);
+      console.log(`✅ Backfilled ${backfillPromises.length} students to RTDB`);
+    }
   });
 
   return () => unsub();
@@ -191,6 +334,56 @@ useEffect(() => {
   }, []);
 
 
+  // LOAD PARENTS
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "parents"), (snap) => {
+      setParents(
+        snap.docs.map((d) => {
+          const data = d.data() as any;
+          const children = (data.children || []).map((c: any) => ({
+            ...c,
+            pickupLocation: c.pickupLocation || data.pickupLocation || "",
+            dropoffLocation: c.dropoffLocation || data.dropoffLocation || "",
+            pickupLat: c.pickupLat ?? data.pickupLat ?? null,
+            pickupLng: c.pickupLng ?? data.pickupLng ?? null,
+            dropoffLat: c.dropoffLat ?? data.dropoffLat ?? null,
+            dropoffLng: c.dropoffLng ?? data.dropoffLng ?? null,
+          }));
+          return {
+            id: d.id,
+            name: data.name || "",
+            phone: data.phone || "",
+            children,
+          };
+        })
+      );
+    });
+    return () => unsub();
+  }, []);
+
+  
+  const geocode = (address: string): Promise<{ lat: number; lng: number } | null> => {
+    return new Promise((resolve) => {
+      const google = (window as any).google;
+  
+      if (!google?.maps?.Geocoder) return resolve(null);
+  
+      const geocoder = new google.maps.Geocoder();
+  
+      geocoder.geocode({ address }, (results: any, status: string) => {
+        if (status === "OK" && results?.[0]) {
+          const loc = results[0].geometry.location;
+          resolve({
+            lat: loc.lat(),
+            lng: loc.lng(),
+          });
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  };
+
   const addStudent = async () => {
     if (!studentId || !studentName || !schoolId || !parentPhone) {
       alert("Fill all required fields");
@@ -212,72 +405,100 @@ useEffect(() => {
       hasError = true;
     }
 
-    // Bus validation
     const id = studentId.toUpperCase().trim();
     const normalizedBusId = busId ? busId.toUpperCase().trim() : "";
-    const schoolBusKey = `${schoolId}_${normalizedBusId}`;
-
-    const existingBus = students.find(
-      (s) =>
-        s.schoolId === schoolId &&
-        (s.busId ? s.busId.toUpperCase().trim() : "") === normalizedBusId &&
-        s.studentId !== id
-    );
-
-    if (normalizedBusId && existingBus) {
-      setBusError(`Bus ${schoolBusKey} already assigned in this school`);
-      hasError = true;
-    }
 
     // Stop if any error
     if (hasError) return;
 
     
-    await setDoc(doc(db, "students", id), {
-      studentId: id,
-      studentName: studentName.trim(),
-      schoolId,
-      schoolRef: schoolId ? `schools/${schoolId}` : "",
-    
-      parentPhone: parentPhone.trim(),
-    
-      routeId: routeId.toUpperCase().trim(),
-      routeRef: routeId ? `routes/${routeId.toUpperCase().trim()}` : "",
-    
-      busId: normalizedBusId,
-      busRef: normalizedBusId ? `buses/${normalizedBusId}` : "",
-    
-      status: "active", // default for manual creation
-    
-      createdAt: new Date(),
-    });
+  // Get lat/lng from parent's child record
+  const parentRecord = parents.find((p) => p.phone === parentPhone.trim());
+    const childRecord = (parentRecord?.children || []).find(
+      (c: any) => (c.name || "").trim().toLowerCase() === studentName.trim().toLowerCase()
+    );
+    console.log("=== LAT/LNG DEBUG ===");
+    console.log("parentRecord:", JSON.stringify(parentRecord));
+    console.log("childRecord:", JSON.stringify(childRecord));
 
+    const pickupCoords = await geocode(pickupLocation);
+const dropoffCoords = await geocode(dropoffLocation);
+
+const now = Date.now();
+const studentData = {
+  studentId: id,
+  studentName: studentName.trim(),
+  schoolId,
+  schoolRef: schoolId ? `schools/${schoolId}` : "",
+  parentPhone: parentPhone.trim(),
+  parentId: linkedParentId || "",
+  routeId: routeId.toUpperCase().trim(),
+  routeRef: routeId ? `routes/${routeId.toUpperCase().trim()}` : "",
+  busId: normalizedBusId,
+  busRef: normalizedBusId ? `buses/${normalizedBusId}` : "",
+  status: "active",
+  createdAt: editingId
+  ? (students.find(s => s.studentId === editingId)?.createdAt || now)
+  : now,
+  createdAtReadable: editingId
+  ? (students.find(s => s.studentId === editingId)?.createdAtReadable || formatDateTime(students.find(s => s.studentId === editingId)?.createdAt))
+  : formatDateTime(now),
+  updatedAt: now,
+  updatedAtReadable: formatDateTime(now),
+  pickupLocation: (childRecord?.pickupLocation || pickupLocation || "").trim(),
+  dropoffLocation: (childRecord?.dropoffLocation || dropoffLocation || "").trim(),
+  pickupLat: pickupCoords?.lat ?? (childRecord?.pickupLat || null),
+  pickupLng: pickupCoords?.lng ?? (childRecord?.pickupLng || null),
+  dropoffLat: dropoffCoords?.lat ?? (childRecord?.dropoffLat || null),
+  dropoffLng: dropoffCoords?.lng ?? (childRecord?.dropoffLng || null),
+};
+
+    // Write to Firestore
+    await setDoc(doc(db, "students", id), studentData);
+
+    // Mirror to RTDB
+    await set(ref(realtimeDb, `students/${id}`), {
+      ...studentData,
+    });
     
-    // reset form after save/update
-    setStudentId("");
-    setStudentName("");
-    setSchoolId("");
-    setParentPhone("");
-    setRouteId("");
-    setBusId("");
-  
-    setEditingId(null);
+   // reset form after save/update
+   setStudentId("");
+   setStudentName("");
+   setSchoolId("");
+   setParentPhone("");
+   setRouteId("");
+   setBusId("");
+   setDropdownValue("");
+   setLinkedParentId("");
+   setPickupLocation("");
+   setDropoffLocation("");
+
+   setEditingId(null);
   };
 
   const deleteStudent = async (id: string) => {
     await deleteDoc(doc(db, "students", id));
+    await remove(ref(realtimeDb, `students/${id}`));
   };
 
   const editStudent = (s: any) => {
+    const parentRecord = parents.find((p) => p.phone === s.parentPhone);
+    const childRecord = (parentRecord?.children || []).find(
+      (c: any) => (c.name || "").trim().toLowerCase() === s.studentName.trim().toLowerCase()
+    );
+
     setStudentId(s.studentId);
     setStudentName(s.studentName);
     setSchoolId(s.schoolId);
     setParentPhone(s.parentPhone);
     setRouteId(s.routeId || "");
     setBusId(s.busId || "");
-  
+    setPickupLocation(childRecord?.pickupLocation || s.pickupLocation || "");
+    setDropoffLocation(childRecord?.dropoffLocation || s.dropoffLocation || "");
+    setDropdownValue(s.studentId);
     setEditingId(s.studentId);
   };
+
   const resetForm = () => {
     setStudentId("");
     setStudentName("");
@@ -285,51 +506,88 @@ useEffect(() => {
     setParentPhone("");
     setRouteId("");
     setBusId("");
-  
+    setDropdownValue("");
+    setLinkedParentId("");
+    setPickupLocation("");
+    setDropoffLocation("");
+
     setPhoneError("");
     setBusError("");
-  
+
     setEditingId(null);
   };
 
-  const filteredStudents = students
-  .filter((student) => {
-    if (selectedSchoolFilter === "all") return true;
-    return student.schoolId === selectedSchoolFilter;
-  })
-  .filter((student) => {
-    const query = searchQuery.toLowerCase().trim();
-    if (!query) return true;
+  
+// Check each child individually against registered student names
+const registeredStudentNames = new Set(
+  students.map((s) => s.studentName.trim().toLowerCase())
+);
 
-    return (
-      student.studentName?.toLowerCase().includes(query) ||
-      student.studentId?.toLowerCase().includes(query) ||
-      student.parentPhone?.toLowerCase().includes(query)
-    );
-  })
-  .filter((student) => {
-    const schoolQuery = schoolSearchQuery.toLowerCase().trim();
-    if (!schoolQuery) return true;
-
-    return (
-      student.schoolId?.toLowerCase().includes(schoolQuery) ||
-      schools.some(
-        (s) =>
-          s.schoolId === student.schoolId &&
-          s.schoolName?.toLowerCase().includes(schoolQuery)
-      )
-    );
-  })
-
-  .filter((student) => {
-    const routeBusQuery = routeSearchQuery.toLowerCase().trim();
-    if (!routeBusQuery) return true;
-
-    return (
-      student.routeId?.toLowerCase().includes(routeBusQuery) ||
-      student.busId?.toLowerCase().includes(routeBusQuery)
-    );
+const pendingChildren: { parentName: string; parentPhone: string; childName: string }[] = [];
+parents.forEach((p) => {
+  (p.children || []).forEach((c: any) => {
+    const name = (c.name || "").trim();
+    if (name && !registeredStudentNames.has(name.toLowerCase())) {
+      pendingChildren.push({
+        parentName: p.name,
+        parentPhone: p.phone,
+        childName: name,
+      });
+    }
   });
+});
+
+// Each unregistered child is its own separate dropdown option
+const pendingGroups: { label: string; phone: string; children: string[] }[] = [];
+parents.forEach((p) => {
+  (p.children || []).forEach((c: any) => {
+    const name = (c.name || "").trim();
+    if (!name) return;
+    if (registeredStudentNames.has(name.toLowerCase())) return;
+    pendingGroups.push({ label: name, phone: p.phone, children: [name] });
+  });
+});
+
+const filteredStudents = students
+.filter((student) => {
+  if (selectedSchoolFilter === "all") return true;
+  return student.schoolId === selectedSchoolFilter;
+})
+.filter((student) => {
+  const query = searchQuery.toLowerCase().trim();
+  if (!query) return true;
+  return (
+    student.studentName?.toLowerCase().includes(query) ||
+    student.studentId?.toLowerCase().includes(query) ||
+    student.parentPhone?.toLowerCase().includes(query)
+  );
+})
+.filter((student) => {
+  const schoolQuery = schoolSearchQuery.toLowerCase().trim();
+  if (!schoolQuery) return true;
+  return (
+    student.schoolId?.toLowerCase().includes(schoolQuery) ||
+    schools.some(
+      (s) =>
+        s.schoolId === student.schoolId &&
+        s.schoolName?.toLowerCase().includes(schoolQuery)
+    )
+  );
+})
+.filter((student) => {
+  const routeBusQuery = routeSearchQuery.toLowerCase().trim();
+  if (!routeBusQuery) return true;
+  return (
+    student.routeId?.toLowerCase().includes(routeBusQuery) ||
+    student.busId?.toLowerCase().includes(routeBusQuery)
+  );
+});
+
+const totalStudentPages = Math.ceil(filteredStudents.length / pageSize);
+const paginatedStudents = filteredStudents.slice(
+  (currentPage - 1) * pageSize,
+  currentPage * pageSize
+);
   return (
     <div
   style={{
@@ -343,7 +601,7 @@ useEffect(() => {
   Students {editingId && <span style={{ color: "#ffa500" }}>(Editing {editingId})</span>}
 </h2>
 
-<div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+<div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap", alignItems: "stretch" }}>
 
   {/* SEARCH STUDENTS */}
   <div style={{
@@ -437,8 +695,8 @@ useEffect(() => {
 {/* SEARCH ROUTE / BUS */}
 <div
   style={{
-    flex: 1,
-    minWidth: 280,
+    flex: 0.9,
+    minWidth: 240,
     padding: 10,
     background: "#f2f2f2",
     borderRadius: 8,
@@ -458,6 +716,7 @@ useEffect(() => {
         padding: 10,
         border: "1px solid #ccc",
         width: "100%",
+        maxWidth: 240,
         borderRadius: 6,
         background: "#f5f5f5",
       }}
@@ -482,8 +741,8 @@ useEffect(() => {
 
 </div>
 
-           {/* FORM */}
-           <div style={{ display: "grid", gap: 10, marginBottom: 20 }}>
+                    {/* FORM */}
+                    <div style={{ display: "grid", gap: 10, marginBottom: 20 }}>
 
 {/* TOP ROW */}
 <div
@@ -513,19 +772,48 @@ useEffect(() => {
  {/* Student Name (Dropdown) */}
 <div style={{ flex: 1, minWidth: 220 }}>
   <select
-    value={studentId}
+    value={dropdownValue}
+    disabled={!!editingId}
     onChange={(e) => {
       const selectedId = e.target.value;
-      setStudentId(selectedId);
+      setDropdownValue(selectedId);
 
-      const selectedStudent = students.find((s) => s.studentId === selectedId);
-      
-      if (selectedStudent) {
-        setStudentName(selectedStudent.studentName);
-        setParentPhone(selectedStudent.parentPhone || "");
-        setSchoolId(selectedStudent.schoolId || "");
-        setRouteId(selectedStudent.routeId || "");
-        setBusId(selectedStudent.busId || "");
+      if (selectedId.startsWith("pending::")) {
+        const childName = selectedId.replace("pending::", "");
+        const group = pendingGroups.find((g) => g.children.includes(childName));
+        const groupPhone = group?.phone || "";
+        const parentRecord = parents.find((p) => p.phone === groupPhone);
+        const childRecord = (parentRecord?.children || []).find(
+          (c: any) => (c.name || "").trim().toLowerCase() === childName.trim().toLowerCase()
+        );
+
+        setStudentId("");
+        setStudentName(childName);
+        setParentPhone(groupPhone);
+        setLinkedParentId(parentRecord?.id || "");
+        setSchoolId("");
+        setRouteId("");
+        setBusId("");
+        setPickupLocation(childRecord?.pickupLocation || "");
+        setDropoffLocation(childRecord?.dropoffLocation || "");
+        return;
+      }
+
+      setStudentId(selectedId);
+      const selectedRegStudent = students.find((s) => s.studentId === selectedId);
+      if (selectedRegStudent) {
+        const parentRecord = parents.find((p) => p.phone === selectedRegStudent.parentPhone);
+        const childRecord = (parentRecord?.children || []).find(
+          (c: any) => (c.name || "").trim().toLowerCase() === selectedRegStudent.studentName.trim().toLowerCase()
+        );
+
+        setStudentName(selectedRegStudent.studentName);
+        setParentPhone(selectedRegStudent.parentPhone || "");
+        setSchoolId(selectedRegStudent.schoolId || "");
+        setRouteId(selectedRegStudent.routeId || "");
+        setBusId(selectedRegStudent.busId || "");
+        setPickupLocation(childRecord?.pickupLocation || selectedRegStudent.pickupLocation || "");
+        setDropoffLocation(childRecord?.dropoffLocation || selectedRegStudent.dropoffLocation || "");
       }
     }}
     style={{
@@ -538,18 +826,31 @@ useEffect(() => {
   >
     <option value="">-- Select Student --</option>
 
-    {students.map((s) => (
-      <option key={s.studentId} value={s.studentId}>
-        {s.studentName}   {/* ← Only clean name, no ID */}
-      </option>
-    ))}
+    {pendingGroups.length > 0 && (
+      <optgroup label="⏳ Pending from Parents">
+        {pendingGroups.map((g, i) => (
+          <option key={`pending-${i}`} value={`pending::${g.children[0]}`}>
+            {g.label}
+          </option>
+        ))}
+      </optgroup>
+    )}
+
+    {students.length > 0 && (
+      <optgroup label="✅ Registered Students">
+        {students.map((s) => (
+          <option key={s.studentId} value={s.studentId}>
+            {s.studentName}
+          </option>
+        ))}
+      </optgroup>
+    )}
   </select>
 </div>
 
   {/* Select School */}
   <div style={{ flex: 1, minWidth: 260 }}>
     <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
-      Select School
     </div>
     <select
       value={schoolId}
@@ -572,39 +873,40 @@ useEffect(() => {
   </div>
 </div>
 
-{/* SECOND ROW - Fixed Alignment + Error Messages */}
-<div
-  style={{
-    display: "flex",
-    gap: 12,
-    alignItems: "flex-end",
-    flexWrap: "wrap",
-  }}
->
-  {/* Parent Phone */}
-  <div style={{ flex: 1, minWidth: 340, display: "flex", flexDirection: "column" }}>
+{/* SECOND ROW - Clean Alignment */}
+<div style={{
+  display: "flex",
+  gap: 24,
+  alignItems: "flex-end",
+  flexWrap: "wrap"
+}}>
+  
+  {/* Phone Number */}
+  <div style={{ flex: 1, minWidth: 240, display: "flex", flexDirection: "column" }}>
     <input
       value={parentPhone}
+      readOnly={!!editingId || !!pendingGroups.find((g) => g.phone === parentPhone)}
       onChange={(e) => {
+        if (editingId || pendingGroups.find((g) => g.phone === parentPhone)) return;
         let raw = e.target.value.replace(/[^0-9+]/g, "").replace(/\s/g, "");
         if (raw.startsWith("+")) raw = raw.slice(0, 13);
         else raw = raw.slice(0, 10);
-
         let formatted = raw;
         if (!raw.startsWith("+") && raw.length > 4) {
           formatted = raw.slice(0, 4) + " " + raw.slice(4, 7) +
                      (raw.length > 7 ? " " + raw.slice(7, 10) : "");
         }
-
         setParentPhone(formatted);
         setPhoneError("");
       }}
-      placeholder="0700 123 456 / 0111 222 333"
+      placeholder="Phone number (0700 123456)"
       style={{
         padding: 10,
         border: "1px solid #ccc",
         borderRadius: 6,
         width: "100%",
+        background: (editingId || pendingGroups.find((g) => g.phone === parentPhone)) ? "#f2f2f2" : "white",
+        cursor: (editingId || pendingGroups.find((g) => g.phone === parentPhone)) ? "not-allowed" : "text",
       }}
     />
     <div style={{ height: "22px", marginTop: 4 }}>
@@ -612,49 +914,111 @@ useEffect(() => {
     </div>
   </div>
 
-  {/* Route ID */}
-  <div style={{ flex: 1, minWidth: 180, display: "flex", flexDirection: "column" }}>
+ {/* Select Route  */}
+<div style={{ 
+  flex: 1.3,           
+  minWidth: 140,       
+  display: "flex", 
+  flexDirection: "column" 
+}}>
   <select
-  value={routeId}
-  onChange={(e) => handleRouteChange(e.target.value)}
+    value={routeId}
+    onChange={(e) => handleRouteChange(e.target.value)}
+    style={{
+      padding: 10,
+      border: "1px solid #ccc",
+      borderRadius: 6,
+      width: "100%",
+    }}
+  >
+    <option value="">Select Route</option>
+    {routes.map((r) => (
+      <option key={r.routeId} value={r.routeId}>
+        {r.routeId}{r.areas.length > 0 ? ` - ${r.areas.join(", ")}` : ""}
+      </option>
+    ))}
+  </select>
+  <div style={{ height: "22px", marginTop: 4 }}></div>
+</div>
+
+
+{/* Bus ID */}
+<div style={{
+  flex: "0 0 105px",
+  minWidth: 105,
+  maxWidth: 105,
+  display: "flex",
+  flexDirection: "column",
+  marginTop: "27px",
+  marginLeft: "-18px"     
+}}>
+  <input
+    value={busId}
+    onChange={(e) => {
+      setBusId(e.target.value.toUpperCase());
+      setBusError("");
+    }}
+    placeholder="Bus ID"
+    style={{
+      padding: 10,
+      border: "1px solid #ccc",
+      borderRadius: 6,
+      width: "100%",
+    }}
+  />
+  <div style={{ height: "22px", marginTop: 4 }}>
+    {busError && <div style={{ color: "red", fontSize: 12 }}>{busError}</div>}
+  </div>
+</div>
+</div>
+
+{/* THIRD ROW - Pickup & Dropoff */}
+<div
+  style={{
+    display: "flex",
+    gap: 30,
+    marginTop: 4,
+    flexWrap: "wrap",
+  }}
+>
+  {/* Pickup Location */}
+  <div style={{ flex: 1, minWidth: 220 }}>
+    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+      Pick up location
+    </div>
+    <input
+  value={pickupLocation}
+  readOnly
+  placeholder="Pick up location"
   style={{
     padding: 10,
     border: "1px solid #ccc",
     borderRadius: 6,
     width: "100%",
+    background: pickupLocation ? "#f2f2f2" : "#fff",
+    cursor: "not-allowed",
   }}
->
-  <option value="">Select Route</option>
-
-  {routes.map((r) => (
-  <option key={r.routeId} value={r.routeId}>
-    {r.routeId}{r.areas.length > 0 ? ` - ${r.areas.join(", ")}` : ""}
-  </option>
-))}
-</select>
-
-    <div style={{ height: "22px", marginTop: 4 }}></div>
+/>
   </div>
 
-  {/* Bus ID */}
-  <div style={{ flex: 1, minWidth: 180, display: "flex", flexDirection: "column" }}>
-    <input
-      value={busId}
-      onChange={(e) => {
-        setBusId(e.target.value.toUpperCase());
-        setBusError("");
-      }}
-      placeholder="Bus ID"
-      style={{
-        padding: 10,
-        border: "1px solid #ccc",
-        borderRadius: 6,
-        width: "100%",
-      }}
-    />
-    <div style={{ height: "22px", marginTop: 4 }}>
-      {busError && <div style={{ color: "red", fontSize: 12 }}>{busError}</div>}
+  {/* Dropoff Location */}
+  <div style={{ flex: 1, minWidth: 220 }}>
+    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+      Drop off location
     </div>
+    <input
+  value={dropoffLocation}
+  readOnly
+  placeholder="Drop off location"
+  style={{
+    padding: 10,
+    border: "1px solid #ccc",
+    borderRadius: 6,
+    width: "100%",
+    background: dropoffLocation ? "#f2f2f2" : "#fff",
+    cursor: "not-allowed",
+  }}
+/>
   </div>
 </div>
 
@@ -682,7 +1046,7 @@ useEffect(() => {
 
   {editingId && (
     <button
-     onClick={resetForm}
+      onClick={resetForm}
       style={{
         background: "#999",
         color: "white",
@@ -700,7 +1064,7 @@ useEffect(() => {
 
 </div>
       
-      <div style={{ marginBottom: 15, display: "flex", gap: 10, alignItems: "center" }}>
+     <div style={{ marginBottom: 15, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
   <label style={{ fontSize: 14, fontWeight: 500 }}>
     Filter by School:
   </label>
@@ -722,11 +1086,45 @@ useEffect(() => {
       </option>
     ))}
   </select>
+
+  {pendingChildren.length > 0 && (
+    <div style={{
+      marginLeft: "auto",
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      background: "#fff4e5",
+      border: "1px solid #f5a623",
+      borderRadius: 8,
+      padding: "6px 12px",
+    }}>
+      <span style={{
+        background: "red",
+        color: "white",
+        borderRadius: "50%",
+        width: 20,
+        height: 20,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 11,
+        fontWeight: 700,
+        flexShrink: 0,
+      }}>
+        {pendingChildren.length}
+      </span>
+      <span style={{ fontSize: 13, color: "#b36200", fontWeight: 500 }}>
+        {pendingChildren.length === 1
+          ? `${pendingChildren[0].childName} (${pendingChildren[0].parentName}) needs completing`
+          : `${pendingChildren.length} children incomplete`}
+      </span>
+    </div>
+  )}
 </div>
 
       {/* LIST */}
       <div style={{ display: "grid", gap: 10 }}>
-      {filteredStudents.map((s) => (
+      {paginatedStudents.map((s) => (
           <div
           key={s.id}
           style={{
@@ -741,12 +1139,14 @@ useEffect(() => {
             boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
           }}
         >
-           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
   
   <div style={{ fontSize: 16, fontWeight: 600 }}>
-    {s.studentName}
+  {s.studentName}
   </div>
 
+   
+  
   <div style={{ fontSize: 12, color: "#555" }}>
     ID: <b>{s.studentId}</b>
   </div>
@@ -756,12 +1156,30 @@ useEffect(() => {
   </div>
 
   <div style={{ fontSize: 12, color: "#555" }}>
-    Parent: {s.parentPhone}
+    Parent: {(() => {
+      const p = parents.find((p) => p.phone === s.parentPhone);
+      return p ? `${p.name} — ${s.parentPhone}` : s.parentPhone;
+    })()}
   </div>
 
   <div style={{ fontSize: 12, color: "#777", marginTop: 4 }}>
     Bus: <b>{s.busId || "-"}</b> | Route: <b>{s.routeId || "-"}</b>
   </div>
+
+  <div style={{ fontSize: 12, color: "#777" }}>
+    Pickup: <b>{s.pickupLocation || "-"}</b>
+  </div>
+
+  <div style={{ fontSize: 12, color: "#777" }}>
+    Dropoff: <b>{s.dropoffLocation || "-"}</b>
+  </div>
+  <div style={{ fontSize: 12, color: "#777" }}>
+  Created: <b>{formatDateTime(s.createdAt)}</b>
+</div>
+
+<div style={{ fontSize: 12, color: "#777" }}>
+  Updated: <b>{formatDateTime(s.updatedAt)}</b>
+</div>
 </div>
 
             <div style={{ display: "flex", gap: 10 }}>
@@ -780,7 +1198,7 @@ useEffect(() => {
   </button>
 
   <button
-    onClick={() => deleteStudent(s.id)}
+    onClick={() => deleteStudent(s.docId)}
     style={{
       background: "red",
       color: "white",
@@ -795,7 +1213,43 @@ useEffect(() => {
 </div>
           </div>
         ))}
-      </div>
+     </div>
+
+{/* PAGINATION */}
+{filteredStudents.length > 0 && (
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, flexWrap: "wrap", gap: 10 }}>
+    <div style={{ fontSize: 13, color: "#555" }}>
+      Showing {Math.min((currentPage - 1) * pageSize + 1, filteredStudents.length)}–{Math.min(currentPage * pageSize, filteredStudents.length)} of {filteredStudents.length}
     </div>
-  );
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <select
+        value={pageSize}
+        onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+        style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #ccc", fontSize: 13 }}
+      >
+        <option value={10}>10</option>
+        <option value={25}>25</option>
+        <option value={50}>50</option>
+      </select>
+      <button
+        onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+        disabled={currentPage === 1}
+        style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #ccc", background: currentPage === 1 ? "#f2f2f2" : "white", cursor: currentPage === 1 ? "not-allowed" : "pointer", fontSize: 13 }}
+      >
+        Prev
+      </button>
+      <span style={{ fontSize: 13 }}>{currentPage} / {totalStudentPages || 1}</span>
+      <button
+        onClick={() => setCurrentPage((p) => Math.min(p + 1, totalStudentPages))}
+        disabled={currentPage === totalStudentPages || totalStudentPages === 0}
+        style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #ccc", background: currentPage === totalStudentPages || totalStudentPages === 0 ? "#f2f2f2" : "white", cursor: currentPage === totalStudentPages || totalStudentPages === 0 ? "not-allowed" : "pointer", fontSize: 13 }}
+      >
+        Next
+      </button>
+    </div>
+  </div>
+)}
+
+</div>
+);
 }

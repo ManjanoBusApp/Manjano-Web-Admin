@@ -1,6 +1,5 @@
-﻿import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./hooks/useAuth";
-
 import Login from "./pages/auth/Login";
 import Dashboard from "./pages/dashboard/Dashboard";
 import Schools from "./pages/schools/Schools";
@@ -9,6 +8,8 @@ import Parents from "./pages/parents/Parents";
 import RoutesPage from "./modules/routes/pages/RoutesPage";
 import "react-phone-number-input/style.css";
 import DashboardLayout from "./components/layout/DashboardLayout";
+import DriverDashboard from "./pages/drivers/DriverDashboard";
+
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -90,6 +91,21 @@ export default function App() {
             user ? (
               <DashboardLayout>
                 <Parents />
+              </DashboardLayout>
+            ) : (
+              <Navigate to="/" />
+            )
+          }
+        />
+
+           
+        {/* DRIVER DASHBOARD */}
+        <Route
+          path="/driver-dashboard"
+          element={
+            user ? (
+              <DashboardLayout>
+                <DriverDashboard />
               </DashboardLayout>
             ) : (
               <Navigate to="/" />

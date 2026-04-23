@@ -4,10 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Manjano Admin</title>
+
+    <!-- ✅ FIXED: stable Google Maps load (NO async) -->
+    <script
+      src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAw9C7fTPJHwzl-KWiLPwaNjq0iYdXd7wo&libraries=places"
+      defer
+    ></script>
   </head>
 
   <body>
     <div id="root"></div>
+
+    <!-- React app -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

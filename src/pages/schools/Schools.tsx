@@ -19,6 +19,8 @@ export default function Schools() {
   const [schoolId, setSchoolId] = useState("");
   const [schoolName, setSchoolName] = useState("");
   const [schoolSearchQuery, setSchoolSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "schools"), (snap) => {
@@ -195,18 +197,21 @@ export default function Schools() {
       </div>
 
       {/* LIST */}
-      <div style={{ display: "grid", gap: 10 }}>
-      {schools
-  .filter((s) => {
-    const q = schoolSearchQuery.toLowerCase().trim();
-    if (!q) return true;
-
-    return (
-      s.schoolId?.toLowerCase().includes(q) ||
-      s.schoolName?.toLowerCase().includes(q)
-    );
-  })
-  .map((s) => (
+      {(() => {
+        const filteredSchools = schools.filter((s) => {
+          const q = schoolSearchQuery.toLowerCase().trim();
+          if (!q) return true;
+          return (
+            s.schoolId?.toLowerCase().includes(q) ||
+            s.schoolName?.toLowerCase().includes(q)
+          );
+        });
+        const totalPages = Math.ceil(filteredSchools.length / pageSize);
+        const paginated = filteredSchools.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+        return (
+          <>
+            <div style={{ display: "grid", gap: 10 }}>
+              {paginated.map((s) => (
           <div
             key={s.id}
             style={{
@@ -245,7 +250,43 @@ export default function Schools() {
             </button>
           </div>
         ))}
-      </div>
-    </div>
-  );
+        </div>
+        {filteredSchools.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, flexWrap: "wrap", gap: 10 }}>
+            <div style={{ fontSize: 13, color: "#555" }}>
+              Showing {Math.min((currentPage - 1) * pageSize + 1, filteredSchools.length)}–{Math.min(currentPage * pageSize, filteredSchools.length)} of {filteredSchools.length}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #ccc", fontSize: 13 }}
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+              </select>
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                disabled={currentPage === 1}
+                style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #ccc", background: currentPage === 1 ? "#f2f2f2" : "white", cursor: currentPage === 1 ? "not-allowed" : "pointer", fontSize: 13 }}
+              >
+                Prev
+              </button>
+              <span style={{ fontSize: 13 }}>{currentPage} / {totalPages || 1}</span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+                disabled={currentPage === totalPages || totalPages === 0}
+                style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #ccc", background: currentPage === totalPages || totalPages === 0 ? "#f2f2f2" : "white", cursor: currentPage === totalPages || totalPages === 0 ? "not-allowed" : "pointer", fontSize: 13 }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  })()}
+</div>
+);
 }

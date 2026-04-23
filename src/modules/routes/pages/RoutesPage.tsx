@@ -13,6 +13,16 @@ import {
   query,
 } from "firebase/firestore";
 
+// 🔥 FORMATTERS (PLACE HERE)
+const toTitleCase = (value: string) => {
+  return value.replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const toCaps = (value: string) => {
+  return (value || "").toUpperCase();
+};
+
+// 👇 YOUR COMPONENT STARTS HERE
 export default function RoutesPage() {
   const [routes, setRoutes] = useState<Route[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,6 +35,8 @@ export default function RoutesPage() {
   const [busInput, setBusInput] = useState("");
 
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // -----------------------------
   // REAL-TIME LISTENER (STABLE FIX)
@@ -190,28 +202,32 @@ export default function RoutesPage() {
             <input
               placeholder="School ID"
               value={schoolId}
-              onChange={(e) => setSchoolId(e.target.value)}
+              onChange={(e) => setSchoolId(toCaps(e.target.value))}
               style={inputStyle}
             />
 
-            <input
-              placeholder="Route Name"
-              value={routeName}
-              onChange={(e) => setRouteName(e.target.value)}
-              style={inputStyle}
-            />
+<input
+  placeholder="Route Name"
+  value={routeName}
+  onChange={(e) => setRouteName(toTitleCase(e.target.value))}
+  style={inputStyle}
+/>
 
-            <input
-              placeholder="Areas (comma separated)"
-              value={areasInput}
-              onChange={(e) => setAreasInput(e.target.value)}
-              style={inputStyle}
-            />
+<input
+  placeholder="Areas (comma separated)"
+  value={areasInput}
+  onChange={(e) =>
+    setAreasInput(
+      e.target.value.replace(/\b\w/g, (char) => char.toUpperCase())
+    )
+  }
+  style={inputStyle}
+/>
 
             <input
               placeholder="Active Bus ID"
               value={busInput}
-              onChange={(e) => setBusInput(e.target.value)}
+              onChange={(e) => setBusInput(toCaps(e.target.value))}
               style={inputStyle}
             />
 
@@ -221,11 +237,20 @@ export default function RoutesPage() {
               </button>
 
               <button
-                onClick={() => setOpenForm(false)}
-                style={actionBtn("gray")}
-              >
-                Cancel
-              </button>
+  onClick={() => {
+    setOpenForm(false);
+
+    // 🔥 CLEAR FORM DATA
+    setSchoolId("");
+    setRouteName("");
+    setAreasInput("");
+    setBusInput("");
+    setEditingRouteId(null);
+  }}
+  style={actionBtn("gray")}
+>
+  Cancel
+</button>
             </div>
           </div>
         </div>
@@ -237,6 +262,7 @@ export default function RoutesPage() {
       ) : routes.length === 0 ? (
         <p>No routes found.</p>
       ) : (
+        <>
         <div
           style={{
             display: "grid",
@@ -244,7 +270,7 @@ export default function RoutesPage() {
             gap: 12,
           }}
         >
-          {routes.map((route) => (
+          {routes.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((route) => (
             <div
               key={route.routeId}
               style={{
@@ -298,6 +324,40 @@ export default function RoutesPage() {
             </div>
           ))}
         </div>
+        {routes.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, flexWrap: "wrap", gap: 10 }}>
+            <div style={{ fontSize: 13, color: "#555" }}>
+              Showing {Math.min((currentPage - 1) * pageSize + 1, routes.length)}–{Math.min(currentPage * pageSize, routes.length)} of {routes.length}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #ccc", fontSize: 13 }}
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+              </select>
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                disabled={currentPage === 1}
+                style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #ccc", background: currentPage === 1 ? "#f2f2f2" : "white", cursor: currentPage === 1 ? "not-allowed" : "pointer", fontSize: 13 }}
+              >
+                Prev
+              </button>
+              <span style={{ fontSize: 13 }}>{currentPage} / {Math.ceil(routes.length / pageSize) || 1}</span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(p + 1, Math.ceil(routes.length / pageSize)))}
+                disabled={currentPage === Math.ceil(routes.length / pageSize) || routes.length === 0}
+                style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #ccc", background: currentPage === Math.ceil(routes.length / pageSize) || routes.length === 0 ? "#f2f2f2" : "white", cursor: currentPage === Math.ceil(routes.length / pageSize) || routes.length === 0 ? "not-allowed" : "pointer", fontSize: 13 }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+        </>
       )}
     </div>
   );

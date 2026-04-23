@@ -57,7 +57,38 @@ export async function updateRoute(routeId: string, data: Partial<Route>) {
 /**
  * DELETE ROUTE (REAL DELETE - FIXED)
  */
+import { realtimeDb } from "../../../firebase/firebase";
+import { ref as rtdbRef, remove } from "firebase/database";
+
+
 export async function deleteRoute(routeId: string) {
-  const ref = doc(db, "routes", routeId);
-  await deleteDoc(ref);
+  try {
+    const studentsSnap = await getDocs(collection(db, "students"));
+
+    const updates: Promise<any>[] = [];
+
+    studentsSnap.forEach((docSnap) => {
+      const data = docSnap.data() as any;
+
+      if (data.routeId === routeId) {
+        updates.push(
+          updateDoc(doc(db, "students", docSnap.id), {
+            routeId: null,
+            updatedAt: Date.now(),
+          })
+        );
+      }
+    });
+
+    await Promise.all(updates);
+
+    const routeRef = doc(db, "routes", routeId);
+
+    // 🔥 check if doc exists first (IMPORTANT for old/corrupt cases)
+    await deleteDoc(routeRef);
+
+  } catch (error) {
+    console.error("Route delete failed:", error);
+    throw error;
+  }
 }

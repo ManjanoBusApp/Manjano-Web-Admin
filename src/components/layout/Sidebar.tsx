@@ -5,7 +5,7 @@ export default function Sidebar() {
 
   const items = [
     { path: "/dashboard", label: "Dashboard" },
-    { path: "/drivers", label: "Drivers" },
+    { path: "/driver-dashboard", label: "Drivers" },
     { path: "/parents", label: "Parents" },
     { path: "/routes", label: "Routes" },
     { path: "/schools", label: "Schools" },
