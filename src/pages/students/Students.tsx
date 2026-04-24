@@ -87,27 +87,22 @@ const normalize = (v: string) =>
     .toLowerCase()
     .replace(/\s+/g, " ");
 
-const getChildFromParent = (parentPhone: string, childName: string) => {
-  const parent = parents.find((p) => p.phone === parentPhone);
-  if (!parent || !Array.isArray(parent.children)) return null;
+    const getChildFromParent = (parentPhone: string, childId: string) => {
+      const parent = parents.find((p) => p.phone === parentPhone);
+      if (!parent || !Array.isArray(parent.children)) return null;
+    
+      return parent.children.find(
+        (c: any) => c.childId === childId
+      ) || null;
+    };
 
-  const target = normalize(childName);
-
-  // 1. strict match (correct path)
-  let match = parent.children.find((c: any) =>
-    normalize(c?.name) === target
-  );
-
-  // 2. fallback match (safer for formatting inconsistencies)
-  if (!match) {
-    match = parent.children.find((c: any) =>
-      normalize(c?.name).includes(target) ||
-      target.includes(normalize(c?.name))
-    );
-  }
-
-  return match || null;
-};
+    const generateStudentId = (name: string) => {
+      return name
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "_")
+        .replace(/[^a-z0-9_]/g, "");
+    };
 
 const handleStudentSelect = (studentId: string) => {
   const student = students.find((s) => s.studentId === studentId);
@@ -115,8 +110,7 @@ const handleStudentSelect = (studentId: string) => {
 
   const parentRecord = parents.find((p) => p.phone === student.parentPhone);
   const childRecord = (parentRecord?.children || []).find(
-    (c: any) => (c.name || "").trim().toLowerCase() === student.studentName.trim().toLowerCase()
-  );
+    (c: any) => c.childId === student.childId  );
 
   setSelectedStudent(student);
   setStudentId(student.studentId);
@@ -206,24 +200,27 @@ useEffect(() => {
     cleanStudents.sort((a, b) => a.studentName.localeCompare(b.studentName));
 
     setStudents(
-      cleanStudents.map((s) => ({
-        docId: s.docId,
-        studentId: s.studentId,
-        studentName: s.studentName,
-        schoolId: s.schoolId,
-        parentPhone: s.parentPhone,
-        parentId: s.parentId,
-        routeId: s.routeId,
-        busId: s.busId,
-        createdAt: s.createdAt,
-        updatedAt: s.updatedAt,
-        createdAtReadable: s._raw?.createdAtReadable,
-        updatedAtReadable: s._raw?.updatedAtReadable,
+      cleanStudents
+        // ONLY REGISTERED STUDENTS ARE ALLOWED IN THIS PAGE
+        .filter((s) => s._raw?.status === "registered")
+        .map((s) => ({
+          docId: s.docId,
+          studentId: s.studentId,
+          studentName: s.studentName,
+          schoolId: s.schoolId,
+          parentPhone: s.parentPhone,
+          parentId: s.parentId,
+          routeId: s.routeId,
+          busId: s.busId,
+          createdAt: s.createdAt,
+          updatedAt: s.updatedAt,
+          createdAtReadable: s._raw?.createdAtReadable,
+          updatedAtReadable: s._raw?.updatedAtReadable,
     
-        // ✅ KEEP THESE ALWAYS SAFE
-        pickupLocation: s.pickupLocation || "",
-        dropoffLocation: s.dropoffLocation || "",
-      }))
+          // SAFE FIELDS
+          pickupLocation: s.pickupLocation || "",
+          dropoffLocation: s.dropoffLocation || "",
+        }))
     );
 
     // ONE-TIME BACKFILL: write any student missing from RTDB
@@ -405,7 +402,7 @@ useEffect(() => {
       hasError = true;
     }
 
-    const id = studentId.toUpperCase().trim();
+    const id = studentId.trim();
     const normalizedBusId = busId ? busId.toUpperCase().trim() : "";
 
     // Stop if any error
@@ -425,6 +422,8 @@ useEffect(() => {
 const dropoffCoords = await geocode(dropoffLocation);
 
 const now = Date.now();
+const isPendingSelection = dropdownValue.startsWith("pending::");
+
 const studentData = {
   studentId: id,
   studentName: studentName.trim(),
@@ -436,7 +435,12 @@ const studentData = {
   routeRef: routeId ? `routes/${routeId.toUpperCase().trim()}` : "",
   busId: normalizedBusId,
   busRef: normalizedBusId ? `buses/${normalizedBusId}` : "",
-  status: "active",
+
+  // 🔥 NEW LIFECYCLE CONTROL
+  status: isPendingSelection ? "registered" : "registered",
+  source: isPendingSelection ? "parent_pending" : "manual",
+
+  active: true,
   createdAt: editingId
   ? (students.find(s => s.studentId === editingId)?.createdAt || now)
   : now,
@@ -454,24 +458,38 @@ const studentData = {
 };
 
     // Write to Firestore
-    await setDoc(doc(db, "students", id), studentData);
-
-    // Mirror to RTDB
+    await setDoc(doc(db, "students", id), {
+      ...studentData,
+      status: "registered",
+      active: true,
+    });
+    
     await set(ref(realtimeDb, `students/${id}`), {
       ...studentData,
+      status: "registered",
+      active: true,
     });
     
    // reset form after save/update
    setStudentId("");
-   setStudentName("");
-   setSchoolId("");
-   setParentPhone("");
-   setRouteId("");
-   setBusId("");
-   setDropdownValue("");
-   setLinkedParentId("");
-   setPickupLocation("");
-   setDropoffLocation("");
+setStudentName("");
+setSchoolId("");
+setParentPhone("");
+setRouteId("");
+setBusId("");
+setDropdownValue("");
+setLinkedParentId("");
+setPickupLocation("");
+setDropoffLocation("");
+
+// 🔥 force refresh pending list UI
+setStudents((prev) =>
+  prev.map((s) =>
+    s.studentName === studentName
+      ? { ...s, _raw: { ...s._raw, status: "registered" } }
+      : s
+  )
+);
 
    setEditingId(null);
   };
@@ -501,16 +519,24 @@ const studentData = {
 
   const resetForm = () => {
     setStudentId("");
-    setStudentName("");
-    setSchoolId("");
-    setParentPhone("");
-    setRouteId("");
-    setBusId("");
-    setDropdownValue("");
-    setLinkedParentId("");
-    setPickupLocation("");
-    setDropoffLocation("");
+setStudentName("");
+setSchoolId("");
+setParentPhone("");
+setRouteId("");
+setBusId("");
+setDropdownValue("");
+setLinkedParentId("");
+setPickupLocation("");
+setDropoffLocation("");
 
+// 🔥 force refresh pending list UI
+setStudents((prev) =>
+  prev.map((s) =>
+    s.studentName === studentName
+      ? { ...s, _raw: { ...s._raw, status: "registered" } }
+      : s
+  )
+);
     setPhoneError("");
     setBusError("");
 
@@ -524,10 +550,18 @@ const registeredStudentNames = new Set(
 );
 
 const pendingChildren: { parentName: string; parentPhone: string; childName: string }[] = [];
+
+const registeredSet = new Set(
+  students.map((s) => s.studentName.trim().toLowerCase())
+);
+
 parents.forEach((p) => {
   (p.children || []).forEach((c: any) => {
     const name = (c.name || "").trim();
-    if (name && !registeredStudentNames.has(name.toLowerCase())) {
+    const key = name.toLowerCase();
+
+    // ONLY true pending (not registered)
+    if (name && !registeredSet.has(key)) {
       pendingChildren.push({
         parentName: p.name,
         parentPhone: p.phone,
@@ -755,19 +789,19 @@ const paginatedStudents = filteredStudents.slice(
 >
   {/* Student ID */}
   <input
-    value={studentId}
-    onChange={(e) => setStudentId(e.target.value.toUpperCase())}
-    placeholder="Student ID"
-    disabled={!!editingId}
-    style={{
-      padding: 10,
-      border: "1px solid #ccc",
-      width: 140,
-      background: editingId ? "#f2f2f2" : "white",
-      cursor: editingId ? "not-allowed" : "text",
-      borderRadius: 6,
-    }}
-  />
+  value={studentId}
+  readOnly={true}
+  disabled={true}
+  placeholder="Student ID"
+  style={{
+    padding: 10,
+    border: "1px solid #ccc",
+    width: 140,
+    background: "#f2f2f2",
+    cursor: "not-allowed",
+    borderRadius: 6,
+  }}
+/>
 
  {/* Student Name (Dropdown) */}
 <div style={{ flex: 1, minWidth: 220 }}>
@@ -779,16 +813,33 @@ const paginatedStudents = filteredStudents.slice(
       setDropdownValue(selectedId);
 
       if (selectedId.startsWith("pending::")) {
-        const childName = selectedId.replace("pending::", "");
-        const group = pendingGroups.find((g) => g.children.includes(childName));
+        const childId = selectedId.replace("pending::", "");
+      
+        // 🔥 SAFETY CHECK: prevent re-selecting already registered student
+        const alreadyRegistered = students.some(
+          (s) =>
+            s.studentName.trim().toLowerCase() === childId.trim().toLowerCase() &&
+            s._raw?.status === "registered"
+        );
+      
+        if (alreadyRegistered) {
+          alert("This student is already registered.");
+          setDropdownValue("");
+          return;
+        }
+      
+        const group = pendingGroups.find((g) => g.children.includes(childId));
         const groupPhone = group?.phone || "";
         const parentRecord = parents.find((p) => p.phone === groupPhone);
+      
         const childRecord = (parentRecord?.children || []).find(
-          (c: any) => (c.name || "").trim().toLowerCase() === childName.trim().toLowerCase()
+          (c: any) =>
+            (c.name || "").trim().toLowerCase() === childId.trim().toLowerCase()
         );
-
-        setStudentId("");
-        setStudentName(childName);
+      
+        const generatedId = generateStudentId(childId);
+setStudentId(generatedId);
+        setStudentName(childId);
         setParentPhone(groupPhone);
         setLinkedParentId(parentRecord?.id || "");
         setSchoolId("");
@@ -796,9 +847,9 @@ const paginatedStudents = filteredStudents.slice(
         setBusId("");
         setPickupLocation(childRecord?.pickupLocation || "");
         setDropoffLocation(childRecord?.dropoffLocation || "");
+      
         return;
       }
-
       setStudentId(selectedId);
       const selectedRegStudent = students.find((s) => s.studentId === selectedId);
       if (selectedRegStudent) {
@@ -827,14 +878,28 @@ const paginatedStudents = filteredStudents.slice(
     <option value="">-- Select Student --</option>
 
     {pendingGroups.length > 0 && (
-      <optgroup label="⏳ Pending from Parents">
-        {pendingGroups.map((g, i) => (
-          <option key={`pending-${i}`} value={`pending::${g.children[0]}`}>
-            {g.label}
-          </option>
-        ))}
-      </optgroup>
-    )}
+  <optgroup label="⏳ Pending from Parents">
+    {pendingGroups.map((g, i) => {
+  const childName = g.children[0];
+
+  // 🔥 FIND MATCH DIRECTLY FROM STUDENTS COLLECTION
+  const studentMatch = students.find(
+    (s) =>
+      s.studentName?.trim().toLowerCase() ===
+      childName.trim().toLowerCase()
+  );
+
+  return (
+    <option
+      key={`pending-${i}`}
+      value={`pending::${childName}`}
+    >
+      {g.label}
+    </option>
+  );
+})}
+  </optgroup>
+)}
 
     {students.length > 0 && (
       <optgroup label="✅ Registered Students">

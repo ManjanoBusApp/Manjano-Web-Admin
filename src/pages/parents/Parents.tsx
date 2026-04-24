@@ -5,7 +5,7 @@ import { createParentWithChildren } from "../../services/parentsService";
 import { collection, onSnapshot, query, orderBy, doc, deleteDoc, updateDoc, getDocs } from "firebase/firestore";
 import { ref, remove } from "firebase/database";
 import { realtimeDb } from "../../firebase/firebase";
-import { updateParentWithChildren } from "../../services/parentsService";
+import { updateParentWithChildren, toggleParentStatus } from "../../services/parentsService";
 import { backfillPickupDropoff } from "../../services/backfill";
 
 
@@ -896,42 +896,86 @@ gap: 10, }}>
 })}
         </div>
 
-        {/* RIGHT SIDE BUTTONS */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+       {/* RIGHT SIDE BUTTONS */}
+       <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "stretch" }}>
 
-          <button
-            onClick={() => setEditingParent(p)}
-            style={{
-              background: "orange",
-              color: "white",
-              border: "none",
-              borderRadius: 6,
-              padding: "6px 10px",
-              cursor: "pointer",
-              fontSize: 12,
-              whiteSpace: "nowrap",
-            }}
-          >
-            Edit
-          </button>
+{/* STATUS TOGGLE */}
+<div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+  <div
+    onClick={async () => {
+      const currentStatus = p.isActive !== false;
+      await toggleParentStatus(p.id, currentStatus);
+    }}
+    style={{
+      width: 44,
+      height: 24,
+      borderRadius: 12,
+      background: p.isActive === false ? "#ccc" : "#BF40BF",
+      position: "relative",
+      cursor: "pointer",
+      transition: "background 0.25s",
+      flexShrink: 0,
+    }}
+  >
+    <div
+      style={{
+        position: "absolute",
+        top: 3,
+        left: p.isActive === false ? 3 : 23,
+        width: 18,
+        height: 18,
+        borderRadius: "50%",
+        background: "white",
+        transition: "left 0.25s",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+      }}
+    />
+  </div>
+  <span
+    style={{
+      fontSize: 10,
+      fontWeight: 700,
+      color: p.isActive === false ? "#cc0000" : "#1a7a1a",
+      letterSpacing: 0.3,
+    }}
+  >
+    {p.isActive === false ? "Inactive" : "Active"}
+  </span>
+</div>
 
-          <button
-            onClick={() => handleDeleteParent(p.id)}
-            style={{
-              background: "red",
-              color: "white",
-              border: "none",
-              borderRadius: 6,
-              padding: "6px 10px",
-              cursor: "pointer",
-              fontSize: 12,
-              whiteSpace: "nowrap",
-            }}
-          >
-            Delete
-          </button>
+<button
+  onClick={() => setEditingParent(p)}
+  style={{
+    background: "orange",
+    color: "white",
+    border: "none",
+    borderRadius: 6,
+    padding: "6px 10px",
+    cursor: "pointer",
+    fontSize: 12,
+    whiteSpace: "nowrap",
+  }}
+>
+  Edit
+</button>
 
-        </div>
+<button
+  onClick={() => handleDeleteParent(p.id)}
+  style={{
+    background: "red",
+    color: "white",
+    border: "none",
+    borderRadius: 6,
+    padding: "6px 10px",
+    cursor: "pointer",
+    fontSize: 12,
+    whiteSpace: "nowrap",
+  }}
+>
+  Delete
+</button>
+
+</div>
       </div>
  ))}
  {sorted.length > 0 && (

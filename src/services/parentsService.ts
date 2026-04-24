@@ -167,13 +167,25 @@ export async function createParentWithChildren(parent: any, children: any[]) {
         childId: childKey,
         displayName: childName,
         photoUrl: DEFAULT_CHILD_PHOTO_URL,
-        eta: "Arriving in 5 minutes",
-        status: "On Route",
-        active: true,
+        eta: "Awaiting activation",
+        status: "pending",
+        active: false,
         parentName: parent.name,
       };
-
       
+      // ✅ CRITICAL: attach child to parent node (this is what mobile reads)
+await set(
+  ref(realtimeDb, `parents/${parentId}/children/${childKey}`),
+  {
+    ...basicChildData,
+    pickupLocation: parent.pickupLocation || "",
+    dropoffLocation: parent.dropoffLocation || "",
+    pickupLat: parent.pickupLat ?? null,
+    pickupLng: parent.pickupLng ?? null,
+    dropoffLat: parent.dropoffLat ?? null,
+    dropoffLng: parent.dropoffLng ?? null,
+  }
+);
       // RTDB: global students mirror
       await set(ref(realtimeDb, `students/${childKey}`), {
         ...basicChildData,
@@ -190,7 +202,7 @@ export async function createParentWithChildren(parent: any, children: any[]) {
         createdAt,
         createdAtReadable: formatReadableDate(createdAt),
       });
-
+      
       // Firestore: global students mirror (web + mobile compatibility)
       await setDoc(doc(db, "students", childKey), {
         ...basicChildData,
@@ -247,7 +259,7 @@ export async function updateParentWithChildren(
       updatedAtReadable: formatReadableDate(updatedAt),
       createdAt: oldData.createdAt ?? updatedAt,
       createdAtReadable: oldData.createdAtReadable ?? formatReadableDate(updatedAt),
-      children: children.map((c) => ({ name: c.name })),
+      children: children.filter((c) => c.name?.trim()).map((c) => ({ name: c.name })),
       pickupLocation: parent.pickupLocation || "",
       dropoffLocation: parent.dropoffLocation || "",
       pickupLat: parent.pickupLat ?? null,
@@ -285,15 +297,15 @@ export async function updateParentWithChildren(
       }
     }
 
-    // Create new parent node in RTDB
-    await set(ref(realtimeDb, `parents/${newRtdbKey}`), {
-      name: parent.name,
-      mobileNumber: normalizedPhone,
-      phone: normalizedPhone,
-      country: parent.country,
-      updatedAt,
-      _displayName: parent.name,
-    });
+   // Update parent node in RTDB - use update() not set() to preserve children sub-node
+   await update(ref(realtimeDb, `parents/${newRtdbKey}`), {
+    name: parent.name,
+    mobileNumber: normalizedPhone,
+    phone: normalizedPhone,
+    country: parent.country,
+    updatedAt,
+    _displayName: parent.name,
+  });
 
     // MERGE existing children data and update with new parent info
     const childrenUpdates: Record<string, any> = {};
@@ -309,8 +321,7 @@ export async function updateParentWithChildren(
       
             // Build child data - MERGE with existing to preserve photoUrl, eta, status, active
             const mergedChildData = {
-              ...existingChildData, // Preserve any other fields first
-              // Override with current values
+              ...existingChildData,
               childId: childKey,
               displayName: childName,
               parentName: parent.name,
@@ -318,8 +329,13 @@ export async function updateParentWithChildren(
               eta: existingChildData.eta || "Arriving in 5 minutes",
               status: existingChildData.status || "On Route",
               active: existingChildData.active !== undefined ? existingChildData.active : true,
+              pickupLocation: parent.pickupLocation || "",
+              dropoffLocation: parent.dropoffLocation || "",
+              pickupLat: parent.pickupLat ?? null,
+              pickupLng: parent.pickupLng ?? null,
+              dropoffLat: parent.dropoffLat ?? null,
+              dropoffLng: parent.dropoffLng ?? null,
             };
-
       // Update child under parent node (RTDB)
       childrenUpdates[childKey] = mergedChildData;
 
@@ -367,24 +383,66 @@ export async function updateParentWithChildren(
       await update(ref(realtimeDb, `parents/${newRtdbKey}/children`), childrenUpdates);
     }
 
-    // Remove children that are no longer in the list
-    if (oldRtdbKey) {
-      const currentChildKeys = children.map(c => sanitizeKey(c.name?.trim() || "")).filter(k => k);
-      for (const oldChildKey of Object.keys(existingChildrenData)) {
-        if (!currentChildKeys.includes(oldChildKey)) {
-          // Remove from parent's children node in RTDB
-          await set(ref(realtimeDb, `parents/${newRtdbKey}/children/${oldChildKey}`), null);
-          // Remove from global students node in RTDB
-          await set(ref(realtimeDb, `students/${oldChildKey}`), null);
-          // Remove from Firestore students collection
-          await deleteDoc(doc(db, "students", oldChildKey));
-        }
-      }
-    }
+   // Remove children that are no longer in the list
+    // Only run this when the parent key has NOT changed (i.e. name edit only, not rename)
+    // When the key changes, existingChildrenData reflects the old node — children are not removed, parent was renamed
+   // 🔥 ALWAYS detect removed children (independent of parent rename)
+if (oldRtdbKey) {
+  const currentChildKeys = children
+    .map(c => sanitizeKey(c.name?.trim() || ""))
+    .filter(k => k);
 
-    // Delete old RTDB parent node if key changed
+  for (const oldChildKey of Object.keys(existingChildrenData)) {
+    if (!currentChildKeys.includes(oldChildKey)) {
+
+      console.log("🗑 Removing child everywhere:", oldChildKey);
+
+      // 1. Remove from OLD parent node
+      await set(ref(realtimeDb, `parents/${oldRtdbKey}/children/${oldChildKey}`), null);
+
+      // 2. Remove from NEW parent node (if renamed)
+      await set(ref(realtimeDb, `parents/${newRtdbKey}/children/${oldChildKey}`), null);
+
+      // 3. Remove from RTDB students
+      // 🔍 Find actual RTDB student key (safe delete)
+const studentsSnap = await get(ref(realtimeDb, "students"));
+
+if (studentsSnap.exists()) {
+  studentsSnap.forEach((snap: any) => {
+    const val = snap.val();
+
+    const matches =
+      val?.childId === oldChildKey ||
+      val?.studentName?.toLowerCase() === oldChildKey.toLowerCase() ||
+      val?.displayName?.toLowerCase() === oldChildKey.toLowerCase();
+
+    if (matches) {
+      console.log("🗑 Deleting RTDB student:", snap.key);
+      set(ref(realtimeDb, `students/${snap.key}`), null);
+    }
+  });
+}
+
+      // 4. Remove from Firestore students
+      await deleteDoc(doc(db, "students", oldChildKey));
+    }
+  }
+}
+
+ // When parent key changes (name renamed):
+    // Mirror the new data and children back to the old node.
+    // This ensures the active mobile app listener (currently on the old key) 
+    // receives the name change AND the updated children list immediately.
     if (oldRtdbKey && oldRtdbKey !== newRtdbKey) {
-      await set(ref(realtimeDb, `parents/${oldRtdbKey}`), null);
+      const mirrorUpdate = {
+        name: parent.name,
+        _displayName: parent.name,
+        mobileNumber: normalizedPhone,
+        phone: normalizedPhone,
+        updatedAt,
+        children: childrenUpdates // Mirrors the same children logic applied to the new node
+      };
+      await update(ref(realtimeDb, `parents/${oldRtdbKey}`), mirrorUpdate);
     }
 
     // Update existing students that were linked to old parent ID
@@ -462,6 +520,32 @@ export async function backfillParentLocations() {
     return { success: true };
   } catch (error) {
     console.error("Backfill error:", error);
+    return { success: false, error };
+  }
+}
+
+/**
+ * =========================
+ * TOGGLE PARENT ACTIVE STATUS
+ * Writes isActive to Firestore + RTDB for the given parentId
+ * =========================
+ */
+export async function toggleParentStatus(parentId: string, currentStatus: boolean): Promise<{ success: boolean; error?: any }> {
+  try {
+    const newStatus = !currentStatus;
+
+    await updateDoc(doc(db, "parents", parentId), {
+      isActive: newStatus,
+    });
+
+    await update(ref(realtimeDb, `parents/${parentId}`), {
+      isActive: newStatus,
+    });
+
+    console.log(`✅ Parent ${parentId} isActive set to ${newStatus}`);
+    return { success: true };
+  } catch (error) {
+    console.error("Toggle parent status error:", error);
     return { success: false, error };
   }
 }

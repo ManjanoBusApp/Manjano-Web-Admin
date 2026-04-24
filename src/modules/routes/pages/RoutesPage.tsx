@@ -43,22 +43,32 @@ export default function RoutesPage() {
   // -----------------------------
   useEffect(() => {
     setLoading(true);
-
+  
+    console.log("🔥 DB INSTANCE:", db);
+  
     const q = query(collection(db, "routes"));
-
+  
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const data: Route[] = snapshot.docs.map((doc) => {
-          const d = doc.data() as Route;
+        console.log("🔥 ROUTES SNAPSHOT SIZE:", snapshot.docs.length);
 
-          return {
-            ...d,
-            routeId: d.routeId || doc.id,
-            areas: Array.isArray(d.areas) ? d.areas : [],
-          };
-        });
+const data: Route[] = snapshot.docs.map((doc) => {
+  const d = doc.data();
 
+  console.log("📦 ROUTE DOC:", doc.id, d);
+
+  return {
+    routeId: doc.id,
+    routeName: d.routeName || "",
+    schoolId: d.schoolId || "",
+    areas: Array.isArray(d.areas) ? d.areas : [],
+    activeBusId: d.activeBusId || "",
+    isDeleted: d.isDeleted ?? false,
+    createdAt: d.createdAt ?? 0,
+    updatedAt: d.updatedAt ?? 0,
+  };
+});
         setRoutes(data);
         setLoading(false);
       },
@@ -134,6 +144,11 @@ export default function RoutesPage() {
   // -----------------------------
   async function handleDelete(routeId: string) {
     try {
+      if (!routeId) {
+        console.error("Missing routeId for delete");
+        return;
+      }
+  
       await deleteRoute(routeId);
     } catch (error) {
       console.error("Delete failed:", error);
@@ -315,11 +330,11 @@ export default function RoutesPage() {
                 </button>
 
                 <button
-                  onClick={() => handleDelete(route.routeId)}
-                  style={actionBtn("red")}
-                >
-                  Delete
-                </button>
+  onClick={() => handleDelete(route.routeId || "")}
+  style={actionBtn("red")}
+>
+  Delete
+</button>
               </div>
             </div>
           ))}
