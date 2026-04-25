@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+
 import {
   collection,
   onSnapshot,
@@ -8,8 +9,11 @@ import {
   setDoc,
   deleteDoc,
   doc,
+  serverTimestamp,
 } from "firebase/firestore";
-import { db } from "../../firebase/firebase";
+
+import { db, rtdb } from "../../firebase/firebase";
+import { ref, update, remove } from "firebase/database";
 
 interface Driver {
   id: string;
@@ -25,6 +29,14 @@ interface Driver {
 
   createdAt?: any
 }
+
+const formatDriverId = (name: string) => {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
+};
 
 const PAGE_SIZE = 8;
 
@@ -52,7 +64,56 @@ export default function DriverDashboard() {
     schoolName: "",
   });
 
+  const [schools, setSchools] = useState<{ id: string; schoolId: string; schoolName: string }[]>([]);
+  const [routes, setRoutes] = useState<{ id: string; routeId: string; schoolId: string; activeBusId?: string }[]>([]);
+
   const black = "#111";
+
+  const [formError, setFormError] = useState("");
+  const [phoneError, setPhoneError] = useState("");
+
+  const isValidKenyanPhone = (phone: string) => {
+    const digits = phone.replace(/\D/g, "");
+    return /^(07\d{8}|01[01]\d{7})$/.test(digits);
+  };
+
+  const isFormValid =
+    !!form.name?.trim() &&
+    !!form.phone?.trim() &&
+    isValidKenyanPhone(form.phone || "") &&
+    !!form.idNumber?.trim() &&
+    !!form.schoolName?.trim() &&
+    !!form.routeId?.trim();
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "schools"), (snap) => {
+      setSchools(
+        snap.docs.map((d) => ({
+          id: d.id,
+          schoolId: (d.data() as any).schoolId || d.id,
+          schoolName: (d.data() as any).schoolName || "",
+        })).filter((s) => s.schoolName)
+      );
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "routes"), (snap) => {
+      setRoutes(
+        snap.docs
+          .map((d) => ({
+            id: d.id,
+            routeId: (d.data() as any).routeId || "",
+            schoolId: (d.data() as any).schoolId || "",
+            activeBusId: (d.data() as any).activeBusId || "",
+            isDeleted: (d.data() as any).isDeleted === true,
+          }))
+          .filter((r) => r.routeId && !r.isDeleted)
+      );
+    });
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     const q = query(collection(db, "drivers"), orderBy("name", "asc"));
@@ -70,10 +131,42 @@ export default function DriverDashboard() {
     return () => unsub();
   }, []);
 
+
+  
+  // TOGGLE ACTIVE STATUS
+  const handleToggleStatus = async (driver: Driver) => {
+    const currentlyActive = driver.status !== "inactive";
+    const newStatus = currentlyActive ? "inactive" : "active";
+    await setDoc(doc(db, "drivers", driver.id), {
+      ...driver,
+      status: newStatus,
+      updatedAt: serverTimestamp(),
+    });
+
+    // Sync status to RTDB immediately
+    await update(ref(rtdb, `drivers/${driver.id}`), {
+      status: newStatus,
+    });
+  };
+
   // SAVE (ADD + EDIT)
   const handleSaveDriver = async () => {
     try {
-      if (!form.name) return;
+      if (!isFormValid) {
+        if (form.phone && !isValidKenyanPhone(form.phone)) {
+          setPhoneError("Invalid number");
+        }
+        setFormError("Please complete all sections");
+        return;
+      }
+      setFormError("");
+
+      const driverId = formatDriverId(form.name);
+      const existing = drivers.find((d) => d.id === driverId);
+      if (!editingDriverId && existing) {
+        alert("Driver already exists with this name");
+        return;
+      }
 
       const payload = {
         name: form.name,
@@ -83,27 +176,58 @@ export default function DriverDashboard() {
         busId: form.busId || "",
         status: form.status || "active",
         schoolName: form.schoolName || "",
-        updatedAt: new Date(),
+        updatedAt: serverTimestamp(),
       };
 
-      // EDIT MODE
-      if (editingDriverId) {
-        await setDoc(doc(db, "drivers", editingDriverId), {
-          ...payload,
-          createdAt:
-            drivers.find((d) => d.id === editingDriverId)?.createdAt ||
-            new Date(),
-        });
+    // EDIT MODE
+    if (editingDriverId) {
+      const newDriverId = formatDriverId(form.name);
+      const oldDriver = drivers.find((d) => d.id === editingDriverId);
+    
+      // If name changed, we MUST remove the old nodes from both databases
+      if (editingDriverId !== newDriverId) {
+        // Remove old record from Firestore
+        await deleteDoc(doc(db, "drivers", editingDriverId));
+        // Remove old record from Realtime Database
+        await remove(ref(rtdb, `drivers/${editingDriverId}`));
+      }
+    
+      // Create/Update the document in Firestore
+      await setDoc(doc(db, "drivers", newDriverId), {
+        ...payload,
+        createdAt: oldDriver?.createdAt ?? serverTimestamp(),
+      });
 
-        setEditingDriverId(null);
-      }
-      // ADD MODE
-      else {
-        await addDoc(collection(db, "drivers"), {
-          ...payload,
-          createdAt: new Date(),
-        });
-      }
+      // Create/Update the node in Realtime Database
+      await update(ref(rtdb, `drivers/${newDriverId}`), {
+        name: form.name,
+        phone: form.phone || "",
+        busId: form.busId || "",
+        routeId: form.routeId || "",
+        status: form.status || "active",
+      });
+    
+      setEditingDriverId(null);
+    }
+
+     // ADD MODE
+     else {
+      const driverId = formatDriverId(form.name);
+
+      await setDoc(doc(db, "drivers", driverId), {
+        ...payload,
+        createdAt: serverTimestamp(),
+      });
+
+      // Sync to RTDB
+      await update(ref(rtdb, `drivers/${driverId}`), {
+        name: form.name,
+        phone: form.phone || "",
+        busId: form.busId || "",
+        routeId: form.routeId || "",
+        status: form.status || "active",
+      });
+    }
 
       // RESET FORM
       setForm({
@@ -126,6 +250,7 @@ export default function DriverDashboard() {
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this driver?")) return;
     await deleteDoc(doc(db, "drivers", id));
+    await remove(ref(rtdb, `drivers/${id}`));
   };
 
   // FILTER
@@ -169,11 +294,12 @@ export default function DriverDashboard() {
       {/* CONTROL BAR */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
 
-        <input
-          placeholder="Search driver..."
+      <input
+          placeholder="Search Driver"
           value={search}
           onChange={(e) => {
-            setSearch(e.target.value);
+            const val = e.target.value.replace(/\b\w/g, (c) => c.toUpperCase());
+            setSearch(val);
             setPage(1);
           }}
           style={{
@@ -199,24 +325,29 @@ export default function DriverDashboard() {
           style={{ padding: 12, borderRadius: 10 }}
         >
           <option value="all">All Schools</option>
-          <option value="Green Valley School">Green Valley School</option>
-          <option value="Sunrise Academy">Sunrise Academy</option>
+          {schools.map((s) => (
+            <option key={s.id} value={s.schoolName}>
+              {s.schoolName}
+            </option>
+          ))}
         </select>
 
         <button
-          onClick={() => {
-            setFormOpen(true);
-            setEditingDriverId(null);
-            setForm({
-              name: "",
-              phone: "",
-              idNumber: "",
-              routeId: "",
-              busId: "",
-              status: "active",
-              schoolName: "",
-            });
-          }}
+        onClick={() => {
+          setFormOpen(true);
+          setEditingDriverId(null);
+          setFormError("");
+          setPhoneError("");
+          setForm({
+            name: "",
+            phone: "",
+            idNumber: "",
+            routeId: "",
+            busId: "",
+            status: "active",
+            schoolName: "",
+          });
+        }}
           style={{
             background: black,
             color: "white",
@@ -247,53 +378,134 @@ export default function DriverDashboard() {
 
           <div style={{ display: "grid", gap: 12 }}>
 
-            <input
+          <input
               placeholder="Name"
               value={form.name}
-              onChange={(e) =>
-                setForm({ ...form, name: e.target.value })
-              }
+              onChange={(e) => {
+                const val = e.target.value.replace(/\b\w/g, (c) => c.toUpperCase());
+                setForm({ ...form, name: val });
+              }}
               style={{ padding: 12, borderRadius: 10, border: "1px solid #ddd" }}
             />
 
-            <input
+<input
               placeholder="Phone"
               value={form.phone}
-              onChange={(e) =>
-                setForm({ ...form, phone: e.target.value })
-              }
-              style={{ padding: 12, borderRadius: 10, border: "1px solid #ddd" }}
-            />
+              onChange={(e) => {
+                let digits = e.target.value.replace(/\D/g, "").slice(0, 10);
 
-            <input
+                let formatted = digits;
+                if (digits.length > 7) {
+                  formatted = digits.slice(0, 4) + " " + digits.slice(4, 7) + " " + digits.slice(7);
+                } else if (digits.length > 4) {
+                  formatted = digits.slice(0, 4) + " " + digits.slice(4);
+                }
+
+                setForm({ ...form, phone: formatted });
+
+                setPhoneError("");
+              }}
+              inputMode="numeric"
+              style={{ padding: 12, borderRadius: 10, border: `1px solid ${phoneError ? "red" : "#ddd"}` }}
+              onBlur={() => {
+                const digits = (form.phone || "").replace(/\D/g, "");
+                if (digits.length > 0 && !isValidKenyanPhone(digits)) {
+                  setPhoneError("Invalid number");
+                } else {
+                  setPhoneError("");
+                }
+              }}
+            />
+            {phoneError && (
+              <span style={{ color: "red", fontSize: 12, marginTop: -8 }}>{phoneError}</span>
+            )}
+
+<input
               placeholder="ID Number"
               value={form.idNumber}
-              onChange={(e) =>
-                setForm({ ...form, idNumber: e.target.value })
-              }
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, "");
+                setForm({ ...form, idNumber: digits });
+              }}
+              inputMode="numeric"
               style={{ padding: 12, borderRadius: 10, border: "1px solid #ddd" }}
             />
 
-            <input
-              placeholder="School Name"
+<select
               value={form.schoolName}
-              onChange={(e) =>
-                setForm({ ...form, schoolName: e.target.value })
-              }
+              onChange={(e) => setForm({ ...form, schoolName: e.target.value, routeId: "" })}
               style={{ padding: 12, borderRadius: 10, border: "1px solid #ddd" }}
-            />
+            >
+              <option value="">Select School</option>
+              {schools.map((s) => (
+                <option key={s.id} value={s.schoolName}>
+                  {s.schoolName}
+                </option>
+              ))}
+            </select>
 
-            <div style={{ display: "flex", gap: 10 }}>
+            <select
+  value={form.routeId}
+  onChange={(e) => {
+    const selectedRouteId = e.target.value;
 
+    const selectedRoute = routes.find(
+      (r) => r.routeId === selectedRouteId
+    );
+
+    setForm({
+      ...form,
+      routeId: selectedRouteId,
+      busId: selectedRoute?.activeBusId || "",
+    });
+  }}
+  style={{ padding: 12, borderRadius: 10, border: "1px solid #ddd" }}
+>
+              <option value="">Select Route</option>
+              {routes
+                .filter((r) => {
+                  if (!form.schoolName) return true;
+                  const selectedSchool = schools.find(
+                    (s) => s.schoolName === form.schoolName
+                  );
+                  return r.schoolId === selectedSchool?.schoolId;
+                })
+                .map((r) => (
+                  <option key={r.id} value={r.routeId}>
+                    {r.routeId}
+                  </option>
+                ))}
+          </select>
+
+<input
+  placeholder="Bus ID"
+  value={form.busId || ""}
+  readOnly
+  style={{
+    padding: 12,
+    borderRadius: 10,
+    border: "1px solid #ddd",
+    background: "#f3f3f3",
+    color: "#555"
+  }}
+/>
+
+{formError && (
+              <span style={{ color: "red", fontSize: 12 }}>{formError}</span>
+            )}
+
+<div style={{ display: "flex", gap: 10 }}>
               <button
                 onClick={handleSaveDriver}
+                disabled={!isFormValid}
                 style={{
-                  background: black,
+                  background: isFormValid ? black : "#aaa",
                   color: "white",
                   padding: 12,
                   borderRadius: 10,
                   border: "none",
                   fontWeight: 600,
+                  cursor: isFormValid ? "pointer" : "not-allowed",
                 }}
               >
                 {editingDriverId ? "Update Driver" : "Save Driver"}
@@ -334,49 +546,101 @@ export default function DriverDashboard() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
+                border: "1px solid #e5e5e5",
+                gap: 16,
               }}
             >
-
-              <div>
+              {/* LEFT — driver info */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>
                   {d.name}
                 </div>
-
                 <div style={{ fontSize: 14, color: "#555" }}>
                   {d.phone} • ID: {d.idNumber}
                 </div>
-
                 <div style={{ fontSize: 13, color: "#777" }}>
                   School: {d.schoolName || "Not assigned"}
                 </div>
+                <div style={{ fontSize: 13, color: "#777" }}>
+                  Route: {d.routeId || "-"} • Bus: {d.busId || "-"}
+                </div>
               </div>
 
-              <div style={{ display: "flex", gap: 8 }}>
+              {/* RIGHT — toggle + buttons */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "stretch" }}>
 
-                {/* EDIT */}
+                {/* STATUS TOGGLE */}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                  <div
+                    onClick={() => handleToggleStatus(d)}
+                    style={{
+                      width: 44,
+                      height: 24,
+                      borderRadius: 12,
+                      background: d.status === "inactive" ? "#ccc" : "#BF40BF",
+                      position: "relative",
+                      cursor: "pointer",
+                      transition: "background 0.25s",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 3,
+                        left: d.status === "inactive" ? 3 : 23,
+                        width: 18,
+                        height: 18,
+                        borderRadius: "50%",
+                        background: "white",
+                        transition: "left 0.25s",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+                      }}
+                    />
+                  </div>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      color: d.status === "inactive" ? "#cc0000" : "#1a7a1a",
+                      letterSpacing: 0.3,
+                    }}
+                  >
+                    {d.status === "inactive" ? "Inactive" : "Active"}
+                  </span>
+                </div>
+
+                {/* EDIT — stays on dashboard */}
                 <button
-                  onClick={() => {
-                    setForm({
-                      name: d.name,
-                      phone: d.phone,
-                      idNumber: d.idNumber,
-                      routeId: d.routeId,
-                      busId: d.busId,
-                      status: d.status,
-                      schoolName: d.schoolName,
-                    });
-
-                    setEditingDriverId(d.id);
-                    setFormOpen(true);
-                  }}
+              onClick={() => {
+                const selectedRoute = routes.find(
+                  (r) => r.routeId === d.routeId
+                );
+              
+                setForm({
+                  name: d.name,
+                  phone: d.phone,
+                  idNumber: d.idNumber,
+                  routeId: d.routeId,
+                  busId: selectedRoute?.activeBusId || "",
+                  status: d.status,
+                  schoolName: d.schoolName,
+                });
+                setFormError("");
+                setPhoneError("");
+                setEditingDriverId(d.id);
+                setFormOpen(true);
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
                   style={{
-                    background: "#ffa500",
+                    background: "orange",
                     color: "white",
-                    padding: "6px 12px",
                     border: "none",
-                    borderRadius: 4,
+                    borderRadius: 6,
+                    padding: "6px 10px",
                     cursor: "pointer",
                     fontSize: 12,
+                    whiteSpace: "nowrap",
                   }}
                 >
                   Edit
@@ -388,11 +652,12 @@ export default function DriverDashboard() {
                   style={{
                     background: "red",
                     color: "white",
-                    padding: "6px 12px",
                     border: "none",
-                    borderRadius: 4,
+                    borderRadius: 6,
+                    padding: "6px 10px",
                     cursor: "pointer",
                     fontSize: 12,
+                    whiteSpace: "nowrap",
                   }}
                 >
                   Delete

@@ -12,6 +12,7 @@ const getCustomReadableDate = () => {
     }
   }
   
+  
   const month = now.toLocaleString('en-GB', { month: 'short' });
   const year = now.getFullYear();
   const time = now.toLocaleString('en-GB', { 
@@ -297,7 +298,8 @@ export async function updateParentWithChildren(
       }
     }
 
-   // Update parent node in RTDB - use update() not set() to preserve children sub-node
+  // Update parent node in RTDB - use update() not set() to preserve children sub-node
+   // isActive is explicitly reset to true so the next toggle cycle works correctly
    await update(ref(realtimeDb, `parents/${newRtdbKey}`), {
     name: parent.name,
     mobileNumber: normalizedPhone,
@@ -305,6 +307,7 @@ export async function updateParentWithChildren(
     country: parent.country,
     updatedAt,
     _displayName: parent.name,
+    isActive: true,
   });
 
     // MERGE existing children data and update with new parent info
@@ -430,20 +433,10 @@ if (studentsSnap.exists()) {
 }
 
  // When parent key changes (name renamed):
-    // Mirror the new data and children back to the old node.
-    // This ensures the active mobile app listener (currently on the old key) 
-    // receives the name change AND the updated children list immediately.
-    if (oldRtdbKey && oldRtdbKey !== newRtdbKey) {
-      const mirrorUpdate = {
-        name: parent.name,
-        _displayName: parent.name,
-        mobileNumber: normalizedPhone,
-        phone: normalizedPhone,
-        updatedAt,
-        children: childrenUpdates // Mirrors the same children logic applied to the new node
-      };
-      await update(ref(realtimeDb, `parents/${oldRtdbKey}`), mirrorUpdate);
-    }
+// Delete the old RTDB node completely to prevent duplicates
+if (oldRtdbKey && oldRtdbKey !== newRtdbKey) {
+  await set(ref(realtimeDb, `parents/${oldRtdbKey}`), null);
+}
 
     // Update existing students that were linked to old parent ID
     const studentsSnap = await getDocs(collection(db, "students"));
@@ -534,15 +527,42 @@ export async function toggleParentStatus(parentId: string, currentStatus: boolea
   try {
     const newStatus = !currentStatus;
 
+    // Update Firestore using parentId (Firestore doc key is always newParentId after edit)
     await updateDoc(doc(db, "parents", parentId), {
       isActive: newStatus,
     });
 
-    await update(ref(realtimeDb, `parents/${parentId}`), {
+    // Resolve the ACTUAL current RTDB key by scanning all parent nodes
+    // This handles cases where parent was renamed (old key deleted, new key created)
+    const firestoreSnap = await getDoc(doc(db, "parents", parentId));
+    const firestorePhone = firestoreSnap.exists()
+      ? (firestoreSnap.data().mobileNumber || firestoreSnap.data().phone || "")
+      : "";
+
+      const rtdbSnap = await get(ref(realtimeDb, "parents"));
+      let resolvedRtdbKey: string | null = null;
+  
+      if (rtdbSnap.exists()) {
+        rtdbSnap.forEach((childSnap: any) => {
+          if (resolvedRtdbKey) return; // stop after first match
+          const val = childSnap.val();
+          const rtdbPhone = val?.mobileNumber || val?.phone || "";
+          if (
+            childSnap.key === parentId ||
+            (firestorePhone && (rtdbPhone === firestorePhone))
+          ) {
+            resolvedRtdbKey = childSnap.key;
+          }
+        });
+      }
+
+    // Write isActive to the resolved RTDB key (correct node even after rename)
+    const rtdbKey = resolvedRtdbKey || parentId;
+    await update(ref(realtimeDb, `parents/${rtdbKey}`), {
       isActive: newStatus,
     });
 
-    console.log(`✅ Parent ${parentId} isActive set to ${newStatus}`);
+    console.log(`✅ Parent ${parentId} (RTDB: ${rtdbKey}) isActive set to ${newStatus}`);
     return { success: true };
   } catch (error) {
     console.error("Toggle parent status error:", error);

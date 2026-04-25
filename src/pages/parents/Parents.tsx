@@ -70,6 +70,12 @@ export default function Parents() {
 
   const [parents, setParents] = useState<any[]>([]);
 
+// ===================== SEARCH / FILTER STATES =====================
+const [searchQuery, setSearchQuery] = useState("");
+const [pickupFilter, setPickupFilter] = useState("");
+const [dropoffFilter, setDropoffFilter] = useState("");
+const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+
   const [editingParent, setEditingParent] = useState<any | null>(null);
   const [pickupLocation, setPickupLocation] = useState("");
   const [dropoffLocation, setDropoffLocation] = useState("");
@@ -817,6 +823,131 @@ gap: 10, }}>
 </button>
 
 </div>
+
+{/* ================= FILTER BAR ================= */}
+<div
+  style={{
+    marginTop: 20,
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 10,
+    alignItems: "center",
+  }}
+>
+  {/* GLOBAL SEARCH */}
+  <input
+    value={searchQuery}
+    onChange={(e) => {
+      let value = e.target.value;
+    
+      const hasDigits = /\d/.test(value);
+    
+      if (country.code === "KE" && hasDigits) {
+        // phone formatting
+        value = formatKenyanPhone(value);
+      } else {
+        // ✅ capitalize words
+        value = toTitleCase(value);
+      }
+    
+      setSearchQuery(value);
+      setCurrentPage(1);
+    }}
+    placeholder="Search parent, phone, child..."
+    style={{
+      flex: 2,
+      minWidth: 220,
+      padding: "8px 10px",
+      borderRadius: 6,
+      border: "1px solid #ccc",
+      fontSize: 13,
+      height: 36,
+    }}
+  />
+
+  {/* PICKUP FILTER */}
+  <input
+    value={pickupFilter}
+    onChange={(e) => {
+      const value = toTitleCase(e.target.value);
+      setPickupFilter(value);
+      setCurrentPage(1);
+    }}
+    placeholder="Filter pickup..."
+    style={{
+      flex: 1,
+      minWidth: 160,
+      padding: "8px 10px",
+      borderRadius: 6,
+      border: "1px solid #ccc",
+      fontSize: 13,
+      height: 36,
+    }}
+  />
+
+  {/* DROPOFF FILTER */}
+  <input
+    value={dropoffFilter}
+    onChange={(e) => {
+      const value = toTitleCase(e.target.value);
+      setDropoffFilter(value);
+      setCurrentPage(1);
+    }}
+    placeholder="Filter dropoff..."
+    style={{
+      flex: 1,
+      minWidth: 160,
+      padding: "8px 10px",
+      borderRadius: 6,
+      border: "1px solid #ccc",
+      fontSize: 13,
+      height: 36,
+    }}
+  />
+
+<button
+  onClick={() => {
+    setSearchQuery("");
+    setPickupFilter("");
+    setDropoffFilter("");
+    setStatusFilter("all");
+    setCurrentPage(1);
+  }}
+  style={{
+    padding: "8px 12px",
+    borderRadius: 6,
+    border: "1px solid #ccc",
+    background: "#f5f5f5",
+    fontSize: 13,
+    height: 36,
+    cursor: "pointer",
+  }}
+>
+  Clear Filters
+</button>
+
+<select
+  value={statusFilter}
+  onChange={(e) => {
+    setStatusFilter(e.target.value as any);
+    setCurrentPage(1);
+  }}
+  style={{
+    flex: 1,
+    minWidth: 140,
+    padding: "8px 10px",
+    borderRadius: 6,
+    border: "1px solid #ccc",
+    fontSize: 13,
+    height: 36,
+  }}
+>
+  <option value="all">All</option>
+  <option value="active">Active</option>
+  <option value="inactive">Inactive</option>
+</select>
+</div>
+
 {/* PARENTS LIST */}
 <div
   style={{
@@ -827,9 +958,45 @@ gap: 10, }}>
   }}
 >
   {(() => {
-    const sorted = [...parents].sort((a, b) => a.name.localeCompare(b.name));
-    const totalPages = Math.ceil(sorted.length / pageSize);
-    const paginated = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+   const filteredParents = parents.filter((p) => {
+    const query = searchQuery.toLowerCase().replace(/\s/g, "");
+  
+    const matchesGlobal =
+      p.name?.toLowerCase().includes(query) ||
+      p.phone?.toLowerCase().replace(/\s/g, "").includes(query) ||
+      p.mobileNumber?.toLowerCase().includes(query) ||
+      p.pickupLocation?.toLowerCase().includes(query) ||
+      p.dropoffLocation?.toLowerCase().includes(query) ||
+      p.children?.some((c: any) =>
+        (typeof c === "string" ? c : c.name)?.toLowerCase().includes(query)
+      );
+  
+    const matchesPickup =
+      !pickupFilter ||
+      p.pickupLocation?.toLowerCase().includes(pickupFilter.toLowerCase());
+  
+    const matchesDropoff =
+      !dropoffFilter ||
+      p.dropoffLocation?.toLowerCase().includes(dropoffFilter.toLowerCase());
+  
+    const matchesStatus =
+      statusFilter === "all" ||
+      (statusFilter === "active" && p.isActive !== false) ||
+      (statusFilter === "inactive" && p.isActive === false);
+  
+    return matchesGlobal && matchesPickup && matchesDropoff && matchesStatus;
+  });
+  
+  const sorted = [...filteredParents].sort((a, b) =>
+    a.name.localeCompare(b.name)
+  );
+  
+  const totalPages = Math.ceil(sorted.length / pageSize);
+  
+  const paginated = sorted.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
     return (
       <>
         {paginated.map((p) => (
@@ -944,7 +1111,14 @@ gap: 10, }}>
 </div>
 
 <button
-  onClick={() => setEditingParent(p)}
+  onClick={async () => {
+    // ✅ Force parent to inactive when entering edit mode
+    if (p.isActive !== false) {
+      await toggleParentStatus(p.id, true);
+    }
+
+    setEditingParent(p);
+  }}
   style={{
     background: "orange",
     color: "white",

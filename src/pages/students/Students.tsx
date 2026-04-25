@@ -83,9 +83,13 @@ const [pageSize, setPageSize] = useState(10);
 const normalize = (v: string) =>
   (v || "")
     .toString()
+    .replace(/^\s*-\s*/, "")     // remove leading "- "
+    .replace(/\s+/g, " ")        // collapse spaces
     .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
+    .toLowerCase();
+
+    const normalizePhone = (v: string) =>
+      (v || "").replace(/\D/g, ""); // removes spaces, +, etc
 
     const getChildFromParent = (parentPhone: string, childId: string) => {
       const parent = parents.find((p) => p.phone === parentPhone);
@@ -582,18 +586,45 @@ parents.forEach((p) => {
   });
 });
 
+const formatPhoneInput = (value: string) => {
+  let digits = value.replace(/\D/g, "").slice(0, 10);
+
+  if (digits.length > 0 && digits[0] !== "0") {
+    digits = "0" + digits.slice(1);
+  }
+
+  if (digits.length > 7) {
+    return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
+  }
+
+  if (digits.length > 4) {
+    return `${digits.slice(0, 4)} ${digits.slice(4)}`;
+  }
+
+  return digits;
+};
+
 const filteredStudents = students
 .filter((student) => {
   if (selectedSchoolFilter === "all") return true;
   return student.schoolId === selectedSchoolFilter;
 })
 .filter((student) => {
-  const query = searchQuery.toLowerCase().trim();
+  const query = searchQuery.trim();
   if (!query) return true;
+
+  const isNumeric = /^[\d\s+]*$/.test(query);
+
+  if (isNumeric) {
+    const phoneQuery = normalizePhone(query);
+    const studentPhone = normalizePhone(student.parentPhone);
+    return studentPhone.includes(phoneQuery);
+  }
+
+  const lowerQuery = query.toLowerCase();
   return (
-    student.studentName?.toLowerCase().includes(query) ||
-    student.studentId?.toLowerCase().includes(query) ||
-    student.parentPhone?.toLowerCase().includes(query)
+    student.studentName.toLowerCase().includes(lowerQuery) ||
+    student.studentId.toLowerCase().includes(lowerQuery)
   );
 })
 .filter((student) => {
@@ -653,7 +684,17 @@ const paginatedStudents = filteredStudents.slice(
     <div style={{ display: "flex", gap: 8 }}>
       <input
         value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
+        onChange={(e) => {
+          const value = e.target.value;
+        
+          const isNumeric = /^[\d\s+]*$/.test(value);
+        
+          if (isNumeric) {
+            setSearchQuery(formatPhoneInput(value));
+          } else {
+            setSearchQuery(toTitleCase(value));
+          }
+        }}
         placeholder="Type name, student ID, or phone..."
         style={{
           padding: 10,
@@ -697,7 +738,7 @@ const paginatedStudents = filteredStudents.slice(
     <div style={{ display: "flex", gap: 8 }}>
   <input
     value={schoolSearchQuery}
-    onChange={(e) => setSchoolSearchQuery(e.target.value)}
+    onChange={(e) => setSchoolSearchQuery(toTitleCase(e.target.value))}
     placeholder="Search school name"
     style={{
       padding: 10,
@@ -953,14 +994,31 @@ setStudentId(generatedId);
       readOnly={!!editingId || !!pendingGroups.find((g) => g.phone === parentPhone)}
       onChange={(e) => {
         if (editingId || pendingGroups.find((g) => g.phone === parentPhone)) return;
-        let raw = e.target.value.replace(/[^0-9+]/g, "").replace(/\s/g, "");
-        if (raw.startsWith("+")) raw = raw.slice(0, 13);
-        else raw = raw.slice(0, 10);
-        let formatted = raw;
-        if (!raw.startsWith("+") && raw.length > 4) {
-          formatted = raw.slice(0, 4) + " " + raw.slice(4, 7) +
-                     (raw.length > 7 ? " " + raw.slice(7, 10) : "");
+      
+        // keep only digits
+        let digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+      
+        // enforce starting with 0
+        if (digits.length > 0 && digits[0] !== "0") {
+          digits = "0" + digits.slice(1);
         }
+      
+        // format: 0700 000 000
+        let formatted = digits;
+      
+        if (digits.length > 4) {
+          formatted = digits.slice(0, 4) + " " + digits.slice(4);
+        }
+      
+        if (digits.length > 7) {
+          formatted =
+            digits.slice(0, 4) +
+            " " +
+            digits.slice(4, 7) +
+            " " +
+            digits.slice(7);
+        }
+      
         setParentPhone(formatted);
         setPhoneError("");
       }}

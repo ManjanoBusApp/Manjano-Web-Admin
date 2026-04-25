@@ -38,6 +38,10 @@ export default function RoutesPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  const [searchQuery, setSearchQuery] = useState("");
+const [schoolFilter, setSchoolFilter] = useState("");
+const [busFilter, setBusFilter] = useState("");
+
   // -----------------------------
   // REAL-TIME LISTENER (STABLE FIX)
   // -----------------------------
@@ -179,9 +183,112 @@ const data: Route[] = snapshot.docs.map((doc) => {
   // -----------------------------
   // UI
   // -----------------------------
+
+  const filteredRoutes = routes.filter((r) => {
+    const query = searchQuery.toLowerCase().trim();
+  
+    const matchesSearch =
+      !query ||
+      r.routeName?.toLowerCase().includes(query) ||
+      r.routeId?.toLowerCase().includes(query) ||
+      r.schoolId?.toLowerCase().includes(query) ||
+      r.activeBusId?.toLowerCase().includes(query) ||
+      r.areas?.some((a) => a.toLowerCase().includes(query));
+  
+    const matchesSchool =
+      !schoolFilter || r.schoolId?.toLowerCase().includes(schoolFilter.toLowerCase());
+  
+    const matchesBus =
+      !busFilter || r.activeBusId?.toLowerCase().includes(busFilter.toLowerCase());
+  
+    return matchesSearch && matchesSchool && matchesBus;
+  });
+
   return (
     <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
       <h2 style={{ fontSize: 22, marginBottom: 10 }}>Routes</h2>
+
+      <div
+  style={{
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 10,
+    marginBottom: 15,
+  }}
+>
+  {/* SEARCH */}
+  <input
+    value={searchQuery}
+    onChange={(e) =>
+      setSearchQuery(
+        e.target.value.replace(/\b\w/g, (char) => char.toUpperCase())
+      )
+    }
+    placeholder="Search route, school, bus, area..."
+    style={{
+      padding: "8px 10px",
+      borderRadius: 6,
+      border: "1px solid #ccc",
+      fontSize: 13,
+      height: 36,
+      flex: 2,
+      minWidth: 220,
+    }}
+  />
+
+  {/* SCHOOL FILTER */}
+  <input
+    value={schoolFilter}
+    onChange={(e) => setSchoolFilter(e.target.value.toUpperCase())}
+    placeholder="Filter by School ID"
+    style={{
+      padding: "8px 10px",
+      borderRadius: 6,
+      border: "1px solid #ccc",
+      fontSize: 13,
+      height: 36,
+      flex: 1,
+      minWidth: 160,
+    }}
+  />
+
+  {/* BUS FILTER */}
+  <input
+    value={busFilter}
+    onChange={(e) => setBusFilter(e.target.value.toUpperCase())}
+    placeholder="Filter by Bus ID"
+    style={{
+      padding: "8px 10px",
+      borderRadius: 6,
+      border: "1px solid #ccc",
+      fontSize: 13,
+      height: 36,
+      flex: 1,
+      minWidth: 160,
+    }}
+  />
+
+  {/* CLEAR */}
+  <button
+    onClick={() => {
+      setSearchQuery("");
+      setSchoolFilter("");
+      setBusFilter("");
+      setCurrentPage(1);
+    }}
+    style={{
+      padding: "8px 12px",
+      borderRadius: 6,
+      border: "1px solid #ccc",
+      background: "#f5f5f5",
+      fontSize: 13,
+      height: 36,
+      cursor: "pointer",
+    }}
+  >
+    Clear
+  </button>
+</div>
 
       <button
         onClick={() => setOpenForm(true)}
@@ -285,7 +392,7 @@ const data: Route[] = snapshot.docs.map((doc) => {
             gap: 12,
           }}
         >
-          {routes.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((route) => (
+          {filteredRoutes.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((route) => (
             <div
               key={route.routeId}
               style={{
@@ -342,7 +449,8 @@ const data: Route[] = snapshot.docs.map((doc) => {
         {routes.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, flexWrap: "wrap", gap: 10 }}>
             <div style={{ fontSize: 13, color: "#555" }}>
-              Showing {Math.min((currentPage - 1) * pageSize + 1, routes.length)}–{Math.min(currentPage * pageSize, routes.length)} of {routes.length}
+            Showing {Math.min((currentPage - 1) * pageSize + 1, filteredRoutes.length)}–
+            {Math.min(currentPage * pageSize, filteredRoutes.length)} of {filteredRoutes.length}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <select
@@ -361,10 +469,14 @@ const data: Route[] = snapshot.docs.map((doc) => {
               >
                 Prev
               </button>
-              <span style={{ fontSize: 13 }}>{currentPage} / {Math.ceil(routes.length / pageSize) || 1}</span>
+              <span style={{ fontSize: 13 }}>
+  {currentPage} / {Math.ceil(filteredRoutes.length / pageSize) || 1}
+</span>
               <button
-                onClick={() => setCurrentPage((p) => Math.min(p + 1, Math.ceil(routes.length / pageSize)))}
-                disabled={currentPage === Math.ceil(routes.length / pageSize) || routes.length === 0}
+                onClick={() =>
+                  setCurrentPage((p) => Math.min(p + 1, Math.ceil(filteredRoutes.length / pageSize)))
+                }
+                disabled={currentPage === Math.ceil(filteredRoutes.length / pageSize) || filteredRoutes.length === 0}
                 style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #ccc", background: currentPage === Math.ceil(routes.length / pageSize) || routes.length === 0 ? "#f2f2f2" : "white", cursor: currentPage === Math.ceil(routes.length / pageSize) || routes.length === 0 ? "not-allowed" : "pointer", fontSize: 13 }}
               >
                 Next
