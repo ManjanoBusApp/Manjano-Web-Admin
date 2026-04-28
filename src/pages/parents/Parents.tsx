@@ -779,16 +779,33 @@ gap: 10, }}>
 {/* CLEAR BUTTON */}
 {editingParent && (
   <button
-    onClick={() => {
-      setEditingParent(null);
-      setParentName("");
-      setPhone("");
-      setChildren([""]);
-      setNameError("");
-      setPhoneError("");
-      setChildError("");
-      setCountry(countries.find((c) => c.code === "KE") || countries[0]);
-    }}
+  onClick={async () => {
+    if (editingParent) {
+      await toggleParentStatus(editingParent.id, false);
+      const { get, update } = await import("firebase/database");
+      const allParentsSnap = await get(ref(realtimeDb, "parents"));
+      if (allParentsSnap.exists()) {
+        allParentsSnap.forEach((childSnap: any) => {
+          const val = childSnap.val();
+          if (
+            childSnap.key === editingParent.id ||
+            val?.mobileNumber === editingParent.phone ||
+            val?.phone === editingParent.phone
+          ) {
+            update(ref(realtimeDb, `parents/${childSnap.key}`), { editingByAdmin: false });
+          }
+        });
+      }
+    }
+    setEditingParent(null);
+    setParentName("");
+    setPhone("");
+    setChildren([""]);
+    setNameError("");
+    setPhoneError("");
+    setChildError("");
+    setCountry(countries.find((c) => c.code === "KE") || countries[0]);
+  }}
     style={{
       background: "#6c757d",
       color: "white",
@@ -1112,13 +1129,26 @@ gap: 10, }}>
 
 <button
   onClick={async () => {
-    // ✅ Force parent to inactive when entering edit mode
     if (p.isActive !== false) {
       await toggleParentStatus(p.id, true);
     }
-
+    const { get, update } = await import("firebase/database");
+    const allParentsSnap = await get(ref(realtimeDb, "parents"));
+    if (allParentsSnap.exists()) {
+      allParentsSnap.forEach((childSnap: any) => {
+        const val = childSnap.val();
+        if (
+          childSnap.key === p.id ||
+          val?.mobileNumber === p.phone ||
+          val?.phone === p.phone
+        ) {
+          update(ref(realtimeDb, `parents/${childSnap.key}`), { editingByAdmin: true });
+        }
+      });
+    }
     setEditingParent(p);
   }}
+  
   style={{
     background: "orange",
     color: "white",

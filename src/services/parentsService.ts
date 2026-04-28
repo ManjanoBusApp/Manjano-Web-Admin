@@ -1,5 +1,7 @@
 import { realtimeDb, db } from "../firebase/firebase";
 
+import { getStorage, ref as storageRef, getDownloadURL, listAll } from "firebase/storage";
+
 const getCustomReadableDate = () => {
   const now = new Date();
   const day = now.getDate();
@@ -156,18 +158,57 @@ export async function createParentWithChildren(parent: any, children: any[]) {
       rtdbKey: parentId,
     });
 
-    // ==================== CRITICAL SYNC: Create children nodes for mobile dashboard ====================
+   // ==================== CRITICAL SYNC: Create children nodes for mobile dashboard ====================
     // This makes children instantly visible in ParentDashboardScreen ("Tracking John", "Tracking John and Andy", etc.)
+
+    // Fetch all Storage filenames once to resolve real photo URLs at create time
+    const storageCreate = getStorage();
+    const storageListRefCreate = storageRef(storageCreate, "Children Images");
+    let storageFileNamesCreate: string[] = [];
+    try {
+      const listResultCreate = await listAll(storageListRefCreate);
+      storageFileNamesCreate = listResultCreate.items.map((item) => item.name);
+    } catch (e) {
+      console.warn("Could not list Storage Children Images on create:", e);
+    }
+
+    const findStorageUrlCreate = async (childKey: string): Promise<string> => {
+      const normalizedKey = childKey.toLowerCase().trim();
+      const normalizedFiles = storageFileNamesCreate.map((name) => ({
+        original: name,
+        normalized: name.replace(/\.[^.]+$/, "").toLowerCase().trim().replace(/[^a-z0-9]/g, "_"),
+      }));
+      let match = normalizedFiles.find((f) => f.normalized === normalizedKey);
+      if (!match) {
+        const parts = normalizedKey.split("_").filter((p) => p.length >= 2);
+        match = normalizedFiles.find((f) =>
+          parts.every((part) => f.normalized.includes(part))
+        );
+      }
+      if (match) {
+        try {
+          const url = await getDownloadURL(storageRef(storageCreate, `Children Images/${match.original}`));
+          return url;
+        } catch {
+          return DEFAULT_CHILD_PHOTO_URL;
+        }
+      }
+      return DEFAULT_CHILD_PHOTO_URL;
+    };
+
     for (const c of children) {
       const childName = c.name?.trim() || "";
       if (!childName) continue;
 
       const childKey = sanitizeKey(childName);
 
+      // Resolve real photo URL from Storage — no parent signin required
+      const resolvedPhotoUrl = await findStorageUrlCreate(childKey);
+
       const basicChildData = {
         childId: childKey,
         displayName: childName,
-        photoUrl: DEFAULT_CHILD_PHOTO_URL,
+        photoUrl: resolvedPhotoUrl,
         eta: "Awaiting activation",
         status: "pending",
         active: false,
@@ -175,18 +216,18 @@ export async function createParentWithChildren(parent: any, children: any[]) {
       };
       
       // ✅ CRITICAL: attach child to parent node (this is what mobile reads)
-await set(
-  ref(realtimeDb, `parents/${parentId}/children/${childKey}`),
-  {
-    ...basicChildData,
-    pickupLocation: parent.pickupLocation || "",
-    dropoffLocation: parent.dropoffLocation || "",
-    pickupLat: parent.pickupLat ?? null,
-    pickupLng: parent.pickupLng ?? null,
-    dropoffLat: parent.dropoffLat ?? null,
-    dropoffLng: parent.dropoffLng ?? null,
-  }
-);
+      await set(
+        ref(realtimeDb, `parents/${parentId}/children/${childKey}`),
+        {
+          ...basicChildData,
+          pickupLocation: parent.pickupLocation || "",
+          dropoffLocation: parent.dropoffLocation || "",
+          pickupLat: parent.pickupLat ?? null,
+          pickupLng: parent.pickupLng ?? null,
+          dropoffLat: parent.dropoffLat ?? null,
+          dropoffLng: parent.dropoffLng ?? null,
+        }
+      );
       // RTDB: global students mirror
       await set(ref(realtimeDb, `students/${childKey}`), {
         ...basicChildData,
@@ -204,7 +245,7 @@ await set(
         createdAtReadable: formatReadableDate(createdAt),
       });
       
-      // Firestore: global students mirror (web + mobile compatibility)
+      // Firestore: global students mirror — includes resolved photoUrl
       await setDoc(doc(db, "students", childKey), {
         ...basicChildData,
         parentId,
@@ -245,6 +286,21 @@ export async function updateParentWithChildren(
     const updatedAt = Date.now();
     const newParentId = generateParentId(parent.name);
     const normalizedPhone = normalizePhoneForFirestore(parent.phone);
+
+    // Mark parent as being edited — driver dashboard will filter out their children
+    const editSnap = await get(ref(realtimeDb, "parents"));
+    if (editSnap.exists()) {
+      editSnap.forEach((childSnap: any) => {
+        const val = childSnap.val();
+        if (
+          childSnap.key === oldParentId ||
+          val?.mobileNumber === oldPhone ||
+          val?.phone === oldPhone
+        ) {
+          update(ref(realtimeDb, `parents/${childSnap.key}`), { editingByAdmin: true });
+        }
+      });
+    }
 
     // READ OLD DOC FIRST TO PRESERVE createdAt
     const oldSnap = await getDoc(doc(db, "parents", oldParentId));
@@ -310,82 +366,146 @@ export async function updateParentWithChildren(
     isActive: true,
   });
 
-    // MERGE existing children data and update with new parent info
-    const childrenUpdates: Record<string, any> = {};
-    
-    for (const c of children) {
-      const childName = c.name?.trim() || "";
-      if (!childName) continue;
+   // Fetch all Storage filenames once for image resolution
+   const storage = getStorage();
+   const storageListRef = storageRef(storage, "Children Images");
+   let storageFileNames: string[] = [];
+   try {
+     const listResult = await listAll(storageListRef);
+     storageFileNames = listResult.items.map((item) => item.name);
+   } catch (e) {
+     console.warn("Could not list Storage Children Images:", e);
+   }
 
-      const childKey = sanitizeKey(childName);
-      
-      // Preserve existing child data if available
-      const existingChildData = existingChildrenData[childKey] || {};
-      
-            // Build child data - MERGE with existing to preserve photoUrl, eta, status, active
-            const mergedChildData = {
-              ...existingChildData,
-              childId: childKey,
-              displayName: childName,
-              parentName: parent.name,
-              photoUrl: existingChildData.photoUrl || DEFAULT_CHILD_PHOTO_URL,
-              eta: existingChildData.eta || "Arriving in 5 minutes",
-              status: existingChildData.status || "On Route",
-              active: existingChildData.active !== undefined ? existingChildData.active : true,
-              pickupLocation: parent.pickupLocation || "",
-              dropoffLocation: parent.dropoffLocation || "",
-              pickupLat: parent.pickupLat ?? null,
-              pickupLng: parent.pickupLng ?? null,
-              dropoffLat: parent.dropoffLat ?? null,
-              dropoffLng: parent.dropoffLng ?? null,
-            };
-      // Update child under parent node (RTDB)
-      childrenUpdates[childKey] = mergedChildData;
+   // Helper: find best matching storage file for a child key
+   const findStorageUrl = async (childKey: string): Promise<string> => {
+     const normalizedKey = childKey.toLowerCase().trim();
 
-      // Update global students mirror (RTDB) - USE UPDATE NOT SET to preserve fields
-      const studentUpdates: Record<string, any> = {
-        parentId: newParentId,
-        parentPhone: normalizedPhone,
-        mobileNumber: normalizedPhone,
-        parentName: parent.name,
-        studentName: childName,
-        displayName: childName,
-        pickupLocation: parent.pickupLocation || "",
-        dropoffLocation: parent.dropoffLocation || "",
-        pickupLat: parent.pickupLat ?? null,
-        pickupLng: parent.pickupLng ?? null,
-        dropoffLat: parent.dropoffLat ?? null,
-        dropoffLng: parent.dropoffLng ?? null,
-        updatedAt,
-        updatedAtReadable: formatReadableDate(updatedAt),
-      };
+     const normalizedFiles = storageFileNames.map((name) => ({
+       original: name,
+       normalized: name.replace(/\.[^.]+$/, "").toLowerCase().trim().replace(/[^a-z0-9]/g, "_"),
+     }));
 
-      await update(ref(realtimeDb, `students/${childKey}`), studentUpdates);
+     // Exact match first
+     let match = normalizedFiles.find((f) => f.normalized === normalizedKey);
 
-      // Update Firestore students mirror (merge-safe)
-      await setDoc(doc(db, "students", childKey), {
-        parentId: newParentId,
-        parentPhone: normalizedPhone,
-        mobileNumber: normalizedPhone,
-        parentName: parent.name,
-        studentName: childName,
-        displayName: childName,
-        pickupLocation: parent.pickupLocation || "",
-        dropoffLocation: parent.dropoffLocation || "",
-        pickupLat: parent.pickupLat ?? null,
-        pickupLng: parent.pickupLng ?? null,
-        dropoffLat: parent.dropoffLat ?? null,
-        dropoffLng: parent.dropoffLng ?? null,
-        updatedAt,
-        updatedAtReadable: formatReadableDate(updatedAt),
-      }, { merge: true });
-    }
+     // Fuzzy match: all parts of key appear in filename
+     if (!match) {
+       const parts = normalizedKey.split("_").filter((p) => p.length >= 2);
+       match = normalizedFiles.find((f) =>
+         parts.every((part) => f.normalized.includes(part))
+       );
+     }
 
-    // Apply all children updates to the parent's children node in one batch
-    if (Object.keys(childrenUpdates).length > 0) {
-      await update(ref(realtimeDb, `parents/${newRtdbKey}/children`), childrenUpdates);
-    }
+     if (match) {
+       try {
+         const url = await getDownloadURL(storageRef(storage, `Children Images/${match.original}`));
+         return url;
+       } catch {
+         return DEFAULT_CHILD_PHOTO_URL;
+       }
+     }
 
+     return DEFAULT_CHILD_PHOTO_URL;
+   };
+
+   // MERGE existing children data and update with new parent info
+   const childrenUpdates: Record<string, any> = {};
+   
+   for (const c of children) {
+     const childName = c.name?.trim() || "";
+     if (!childName) continue;
+
+     const childKey = sanitizeKey(childName);
+     
+     // Preserve existing child data if available
+     const existingChildData = existingChildrenData[childKey] || {};
+
+     // Resolve photo URL: use existing if valid, otherwise look up Storage directly
+     const existingUrl = existingChildData.photoUrl || "";
+     const isValidExisting = existingUrl && existingUrl !== DEFAULT_CHILD_PHOTO_URL && existingUrl !== "null";
+     const resolvedPhotoUrl = isValidExisting ? existingUrl : await findStorageUrl(childKey);
+
+     // Build child data - MERGE with existing to preserve photoUrl, eta, status, active
+     const mergedChildData = {
+       ...existingChildData,
+       childId: childKey,
+       displayName: childName,
+       parentName: parent.name,
+       photoUrl: resolvedPhotoUrl,
+       eta: existingChildData.eta || "Arriving in 5 minutes",
+       status: existingChildData.status || "On Route",
+       active: existingChildData.active !== undefined ? existingChildData.active : true,
+       pickupLocation: parent.pickupLocation || "",
+       dropoffLocation: parent.dropoffLocation || "",
+       pickupLat: parent.pickupLat ?? null,
+       pickupLng: parent.pickupLng ?? null,
+       dropoffLat: parent.dropoffLat ?? null,
+       dropoffLng: parent.dropoffLng ?? null,
+     };
+
+     // Update child under parent node (RTDB)
+     childrenUpdates[childKey] = mergedChildData;
+
+     // Update global students mirror (RTDB) - USE UPDATE NOT SET to preserve fields
+     // Read existing student from RTDB first to preserve status, eta, active
+     const existingStudentSnap = await get(ref(realtimeDb, `students/${childKey}`));
+     const existingStudentData = existingStudentSnap.exists() ? existingStudentSnap.val() : {};
+
+     const existingStudentUrl = existingStudentData.photoUrl || "";
+     const isValidStudentUrl = existingStudentUrl && existingStudentUrl !== DEFAULT_CHILD_PHOTO_URL && existingStudentUrl !== "null";
+     const resolvedStudentPhotoUrl = isValidStudentUrl ? existingStudentUrl : resolvedPhotoUrl;
+
+     const studentUpdates: Record<string, any> = {
+       childId: childKey,
+       displayName: childName,
+       studentName: childName,
+       parentId: newParentId,
+       parentPhone: normalizedPhone,
+       mobileNumber: normalizedPhone,
+       parentName: parent.name,
+       photoUrl: resolvedStudentPhotoUrl,
+       status: existingStudentData.status || "On Route",
+       eta: existingStudentData.eta || "Arriving in 5 minutes",
+       active: existingStudentData.active !== undefined ? existingStudentData.active : true,
+       pickupLocation: parent.pickupLocation || "",
+       dropoffLocation: parent.dropoffLocation || "",
+       pickupLat: parent.pickupLat ?? null,
+       pickupLng: parent.pickupLng ?? null,
+       dropoffLat: parent.dropoffLat ?? null,
+       dropoffLng: parent.dropoffLng ?? null,
+       updatedAt,
+       updatedAtReadable: formatReadableDate(updatedAt),
+     };
+
+     await update(ref(realtimeDb, `students/${childKey}`), studentUpdates);
+
+     // Update Firestore students mirror (merge-safe) - now includes photoUrl
+     await setDoc(doc(db, "students", childKey), {
+       parentId: newParentId,
+       parentPhone: normalizedPhone,
+       mobileNumber: normalizedPhone,
+       parentName: parent.name,
+       studentName: childName,
+       displayName: childName,
+       photoUrl: resolvedStudentPhotoUrl,
+       pickupLocation: parent.pickupLocation || "",
+       dropoffLocation: parent.dropoffLocation || "",
+       pickupLat: parent.pickupLat ?? null,
+       pickupLng: parent.pickupLng ?? null,
+       dropoffLat: parent.dropoffLat ?? null,
+       dropoffLng: parent.dropoffLng ?? null,
+       updatedAt,
+       updatedAtReadable: formatReadableDate(updatedAt),
+     }, { merge: true });
+   }
+
+   // Apply all children updates to the parent's children node in one batch
+   if (Object.keys(childrenUpdates).length > 0) {
+     await update(ref(realtimeDb, `parents/${newRtdbKey}/children`), childrenUpdates);
+   }
+
+   
    // Remove children that are no longer in the list
     // Only run this when the parent key has NOT changed (i.e. name edit only, not rename)
     // When the key changes, existingChildrenData reflects the old node — children are not removed, parent was renamed
@@ -439,12 +559,22 @@ if (oldRtdbKey && oldRtdbKey !== newRtdbKey) {
 }
 
     // Update existing students that were linked to old parent ID
+    // Only process students whose key is still a valid current child key
+    // to avoid recreating ghost RTDB nodes for deleted/renamed children
+    const currentChildKeysFinal: string[] = children
+      .map((c: any) => sanitizeKey(c.name?.trim() || ""))
+      .filter(Boolean);
+
     const studentsSnap = await getDocs(collection(db, "students"));
     const updates: Promise<any>[] = [];
 
     studentsSnap.forEach((docSnap) => {
       const data: any = docSnap.data();
       if (data.parentId === oldParentId || data.parentPhone === oldPhone) {
+        // Skip student keys that are no longer in the current children list
+        // These were already cleaned up by the removal loop above
+        if (!currentChildKeysFinal.includes(docSnap.id)) return;
+
         const payload = {
           parentId: newParentId,
           parentName: parent.name,
@@ -461,18 +591,21 @@ if (oldRtdbKey && oldRtdbKey !== newRtdbKey) {
         };
 
         updates.push(updateDoc(doc(db, "students", docSnap.id), payload));
-        updates.push(update(ref(realtimeDb, `students/${docSnap.id}`), payload));
+        // RTDB already fully updated per-child above (with photoUrl + displayName preserved) — do not update here again
       }
     });
 
     await Promise.all(updates);
 
-    console.log("✅ Parent updated successfully with mobileNumber:", normalizedPhone);
-    return { success: true };
-  } catch (error) {
-    console.error("Update parent error:", error);
-    return { success: false, error };
-  }
+   // Clear editingByAdmin flag — children are now restored to driver dashboard
+   await update(ref(realtimeDb, `parents/${newRtdbKey}`), { editingByAdmin: false });
+
+   console.log("✅ Parent updated successfully with mobileNumber:", normalizedPhone);
+   return { success: true };
+ } catch (error) {
+   console.error("Update parent error:", error);
+   return { success: false, error };
+ }
 }
 
 /**
@@ -556,10 +689,12 @@ export async function toggleParentStatus(parentId: string, currentStatus: boolea
         });
       }
 
-    // Write isActive to the resolved RTDB key (correct node even after rename)
+   // Write isActive to the resolved RTDB key (correct node even after rename)
+    // editingByAdmin mirrors isActive inverse: inactive = hide children from driver dashboard
     const rtdbKey = resolvedRtdbKey || parentId;
     await update(ref(realtimeDb, `parents/${rtdbKey}`), {
       isActive: newStatus,
+      editingByAdmin: !newStatus,
     });
 
     console.log(`✅ Parent ${parentId} (RTDB: ${rtdbKey}) isActive set to ${newStatus}`);

@@ -5,10 +5,11 @@ import {
   setDoc,
   deleteDoc,
   doc,
+  getDoc,
 } from "firebase/firestore";
 
 import { db, realtimeDb } from "../../firebase/firebase";
-import { ref, set, remove } from "firebase/database";
+import { ref, set, remove, get } from "firebase/database";
 
 const formatDateTime = (value) => {
   if (!value) return "-";
@@ -385,6 +386,8 @@ useEffect(() => {
     });
   };
 
+  const DEFAULT_CHILD_PHOTO_URL = "https://firebasestorage.googleapis.com/v0/b/manjano-bus.firebasestorage.app/o/Default%20Image%2Fdefaultchild.png?alt=media";
+
   const addStudent = async () => {
     if (!studentId || !studentName || !schoolId || !parentPhone) {
       alert("Fill all required fields");
@@ -461,18 +464,38 @@ const studentData = {
   dropoffLng: dropoffCoords?.lng ?? (childRecord?.dropoffLng || null),
 };
 
-    // Write to Firestore
-    await setDoc(doc(db, "students", id), {
-      ...studentData,
-      status: "registered",
-      active: true,
-    });
-    
-    await set(ref(realtimeDb, `students/${id}`), {
-      ...studentData,
-      status: "registered",
-      active: true,
-    });
+ // Read existing RTDB student node first to preserve photoUrl, parentName,
+  // displayName, childId, eta — fields the Driver Dashboard depends on
+  const existingRtdbStudentSnap = await get(ref(realtimeDb, `students/${id}`));
+  const existingRtdbStudent = existingRtdbStudentSnap.exists() ? existingRtdbStudentSnap.val() : {};
+
+  // Read existing Firestore student doc to preserve photoUrl
+  const existingFsStudentSnap = await getDoc(doc(db, "students", id));
+  const existingFsStudent = existingFsStudentSnap.exists() ? existingFsStudentSnap.data() : {};
+
+  const preservedPhotoUrl = existingRtdbStudent.photoUrl
+    || existingFsStudent.photoUrl
+    || DEFAULT_CHILD_PHOTO_URL;
+
+  // Write to Firestore — preserve photoUrl never overwrite with blank
+  await setDoc(doc(db, "students", id), {
+    ...studentData,
+    status: "registered",
+    active: true,
+    photoUrl: preservedPhotoUrl,
+  });
+
+  await set(ref(realtimeDb, `students/${id}`), {
+    ...studentData,
+    status: "registered",
+    active: true,
+    // Preserve driver-critical fields from existing node — never overwrite with blank
+    photoUrl: preservedPhotoUrl,
+    parentName: existingRtdbStudent.parentName || studentData.parentId || "",
+    displayName: existingRtdbStudent.displayName || studentData.studentName,
+    childId: existingRtdbStudent.childId || id,
+    eta: existingRtdbStudent.eta || "Arriving in 5 minutes",
+  });
     
    // reset form after save/update
    setStudentId("");
