@@ -26,7 +26,6 @@ export default function Dashboard() {
     { title: "Parents", value: parents },
     { title: "Admins", value: admins },
     { title: "Buses", value: buses },
-    { title: "Children", value: children },
     { title: "Routes", value: routes },
     
   ];
